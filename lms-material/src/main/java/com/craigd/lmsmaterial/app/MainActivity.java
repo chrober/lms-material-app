@@ -899,7 +899,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @JavascriptInterface
-    @JavascriptInterface
     public void updateConnectionStatus(boolean connected) {
         Utils.debug(""+connected);
         if (connected) {
@@ -907,7 +906,7 @@ public class MainActivity extends AppCompatActivity {
             if (LmsMediaService.isActive()) {
                 refreshLmsMediaService();
             }
-            handler.post(() -> webView.evaluateJavascript(
+            runOnUiThread(() -> webView.evaluateJavascript(
                     "try { NativeReceiver.updateAutoHomeItems(localStorage.getItem('detailedHomeItems') || '[]'); } catch(e) {}",
                     null));
         } else {
