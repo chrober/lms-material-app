@@ -73,11 +73,12 @@
         </activity>
 
         <service
-            android:exported="false"
-            android:name=".ControlService"
+            android:exported="true"
+            android:name=".LmsMediaService"
             android:enabled="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </service>
@@ -110,7 +111,7 @@
             </intent-filter>
         </receiver>
         <receiver
-            android:name=".ControlService$ConnectionChangeListener"
+            android:name=".LmsMediaService$ConnectionChangeListener"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.net.conn.CONNECTIVITY_CHANGE" tools:ignore="BatteryLife" />
@@ -120,6 +121,9 @@
         <meta-data
             android:name="android.webkit.WebView.MetricsOptOut"
             android:value="true" />
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="com.craigd.lmsmaterial.app.fileprovider"

@@ -20,7 +20,7 @@ import android.os.SystemClock;
 import androidx.preference.PreferenceManager;
 
 import com.android.volley.Response;
-import com.craigd.lmsmaterial.app.ControlService;
+import com.craigd.lmsmaterial.app.LmsMediaService;
 import com.craigd.lmsmaterial.app.JsonRpc;
 import com.craigd.lmsmaterial.app.MainActivity;
 import com.craigd.lmsmaterial.app.ServerDiscovery;
@@ -59,7 +59,7 @@ public class CometClient {
     private String serverUser = "";
     private String serverPass = "";
     private final Handler backgroundHandler;
-    private ControlService service;
+    private LmsMediaService service;
     private JsonRpc rpc;
     private Response.Listener<JSONObject> rpcResponse;
     private int handShakeFailures = 0;
@@ -143,7 +143,7 @@ public class CometClient {
         }
     }
 
-    public CometClient(ControlService service) {
+    public CometClient(LmsMediaService service) {
         this.service = service;
         prefs = PreferenceManager.getDefaultSharedPreferences(service.getApplicationContext());
         connectionState = new ConnectionState();

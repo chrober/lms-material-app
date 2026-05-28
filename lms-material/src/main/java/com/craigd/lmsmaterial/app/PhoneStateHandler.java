@@ -78,7 +78,7 @@ public class PhoneStateHandler {
 
     private void callStarted(String action) {
         Utils.debug("Call started, activePlayers:"+activePlayers);
-        if (MainActivity.isActive() || ControlService.isActive()) {
+        if (MainActivity.isActive() || LmsMediaService.isActive()) {
             inCall = true;
             if (MUTE_CURRENT.equals(action) || PAUSE_CURRENT.equals(action)) {
                 activePlayers.add(MainActivity.activePlayer);

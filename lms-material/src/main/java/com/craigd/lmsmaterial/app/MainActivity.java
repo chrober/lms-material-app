@@ -145,7 +145,7 @@ public class MainActivity extends AppCompatActivity {
             Utils.debug("Setup control messenger");
             controlServiceMessenger = new Messenger(service);
             if (null != activePlayer && null != activePlayerName) {
-                sendMessageToService(ControlService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
+                sendMessageToService(LmsMediaService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
             }
         }
 
@@ -382,7 +382,7 @@ public class MainActivity extends AppCompatActivity {
             editor.putString(SettingsActivity.ON_CALL_PREF_KEY, PhoneStateHandler.DO_NOTHING);
             modified=true;
         }
-        boolean haveNotifPerm = Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID);
+        boolean haveNotifPerm = Utils.notificationAllowed(this, LmsMediaService.NOTIFICATION_CHANNEL_ID);
         if (! PhoneStateHandler.DO_NOTHING.equals(sharedPreferences.getString(SettingsActivity.ON_CALL_PREF_KEY, PhoneStateHandler.DO_NOTHING)) &&
                 (!haveNotifPerm ||
                         ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)) {
@@ -394,8 +394,8 @@ public class MainActivity extends AppCompatActivity {
             modified=true;
         }
         if (!sharedPreferences.contains(SettingsActivity.NOTIFCATIONS_PREF_KEY) ||
-                (!haveNotifPerm && !ControlService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION)))) {
-            editor.putString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION);
+                (!haveNotifPerm && !LmsMediaService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION)))) {
+            editor.putString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION);
             modified=true;
         }
         if (!sharedPreferences.contains(SettingsActivity.SHOW_OVER_LOCK_SCREEN_PREF_KEY)) {
@@ -567,9 +567,9 @@ public class MainActivity extends AppCompatActivity {
         if (sharedPreferences.getBoolean(SettingsActivity.FULLSCREEN_PREF_KEY, false)) {
             setFullScreen(true, true);
         }
-        manageControlService(false);
+        manageLmsMediaService(false);
         onCall = sharedPreferences.getString(SettingsActivity.ON_CALL_PREF_KEY, PhoneStateHandler.DO_NOTHING);
-        notifications = sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION);
+        notifications = sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION);
         setOrientation();
         ActionBar ab = getSupportActionBar();
         if (ab != null) {
@@ -628,7 +628,7 @@ public class MainActivity extends AppCompatActivity {
                 localPlayer.autoStart(false);
                 pageLoaded = true;
                 webView.setVisibility(View.VISIBLE);
-                sendMessageToService(ControlService.CHECK_COMET_CONNECTION, null);
+                sendMessageToService(LmsMediaService.CHECK_COMET_CONNECTION, null);
                 super.onPageStarted(view, u, favicon);
             }
 
@@ -663,7 +663,7 @@ public class MainActivity extends AppCompatActivity {
                         navigateToSettingsActivity();
                         return true;
                     case QUIT_URL:
-                        stopControlService();
+                        stopLmsMediaService();
                         finishAffinity();
                         localPlayer.autoStop();
                         System.exit(0);
@@ -800,7 +800,15 @@ public class MainActivity extends AppCompatActivity {
 
         interceptVolume = !sharedPreferences.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true) || !isLocalPlayer(ip);
         Utils.debug("interceptVolume:"+interceptVolume);
-        sendMessageToService(ControlService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
+        sendMessageToService(LmsMediaService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
+    }
+
+    @JavascriptInterface
+    public void updateAutoHomeItems(String jsonItems) {
+        Utils.debug("updateAutoHomeItems: " + jsonItems);
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putString("auto_home_items", jsonItems);
+        editor.apply();
     }
 
     public static Set<String> getLocalIpAddresses() {
@@ -891,13 +899,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @JavascriptInterface
+    @JavascriptInterface
     public void updateConnectionStatus(boolean connected) {
         Utils.debug(""+connected);
         if (connected) {
             stopDisconnectTimer();
-            if (ControlService.isActive()) {
-                refreshControlService();
+            if (LmsMediaService.isActive()) {
+                refreshLmsMediaService();
             }
+            handler.post(() -> webView.evaluateJavascript(
+                    "try { NativeReceiver.updateAutoHomeItems(localStorage.getItem('detailedHomeItems') || '[]'); } catch(e) {}",
+                    null));
         } else {
             startDisconnectTimer();
         }
@@ -1097,11 +1109,11 @@ public class MainActivity extends AppCompatActivity {
             if (pageLoaded) {
                 localPlayer.autoStart(true);
             }
-            if (!ControlService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION)) && Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID)) {
-                if (!ControlService.isActive()) {
-                    startControlService();
+            if (!LmsMediaService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION)) && Utils.notificationAllowed(this, LmsMediaService.NOTIFICATION_CHANNEL_ID)) {
+                if (!LmsMediaService.isActive()) {
+                    startLmsMediaService();
                 } else {
-                    refreshControlService();
+                    refreshLmsMediaService();
                 }
             }
             return;
@@ -1153,8 +1165,8 @@ public class MainActivity extends AppCompatActivity {
         }
         setOrientation();
         String onCallNow = sharedPreferences.getString(SettingsActivity.ON_CALL_PREF_KEY, PhoneStateHandler.DO_NOTHING);
-        String notificationsNow = sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION);
-        manageControlService(!onCallNow.equals(onCall) || !notificationsNow.equals(notifications));
+        String notificationsNow = sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION);
+        manageLmsMediaService(!onCallNow.equals(onCall) || !notificationsNow.equals(notifications));
         onCall = onCallNow;
         notifications = notificationsNow;
         manageShowOverLockscreen();
@@ -1230,7 +1242,7 @@ public class MainActivity extends AppCompatActivity {
         Utils.info("");
         webView.destroy();
         webView = null;
-        stopControlService();
+        stopLmsMediaService();
         if (null!=activePlayer && !activePlayer.equals(sharedPreferences.getString(CURRENT_PLAYER_ID_KEY, null))) {
             SharedPreferences.Editor editor = sharedPreferences.edit();
             editor.putString(CURRENT_PLAYER_ID_KEY, activePlayer);
@@ -1243,36 +1255,36 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
     }
 
-    void manageControlService(boolean needRestart) {
+    void manageLmsMediaService(boolean needRestart) {
         Utils.debug("needRestart:"+needRestart);
-        boolean showNotif = !ControlService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION));
-        if (showNotif && !Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID)) {
+        boolean showNotif = !LmsMediaService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION));
+        if (showNotif && !Utils.notificationAllowed(this, LmsMediaService.NOTIFICATION_CHANNEL_ID)) {
             showNotif = false;
             SharedPreferences.Editor editor = sharedPreferences.edit();
-            editor.putString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION);
+            editor.putString(SettingsActivity.NOTIFCATIONS_PREF_KEY, LmsMediaService.NO_NOTIFICATION);
             editor.putString(SettingsActivity.ON_CALL_PREF_KEY, PhoneStateHandler.DO_NOTHING);
             editor.apply();
         }
         if (showNotif) {
             if (needRestart) {
-                stopControlService();
+                stopLmsMediaService();
             }
-            startControlService();
+            startLmsMediaService();
         } else {
-            stopControlService();
+            stopLmsMediaService();
         }
     }
 
-    void startControlService() {
+    void startLmsMediaService() {
         if (controlServiceMessenger!=null) {
             return;
         }
         Utils.debug("Start control service");
-        Intent intent = new Intent(MainActivity.this, ControlService.class);
+        Intent intent = new Intent(MainActivity.this, LmsMediaService.class);
         bindService(intent, controlServiceConnection, Context.BIND_AUTO_CREATE);
     }
 
-    void stopControlService() {
+    void stopLmsMediaService() {
         if (controlServiceMessenger!=null) {
             Utils.debug("Stop control service");
             try {
@@ -1280,7 +1292,7 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 Utils.error("Failed to unbind control service");
             }
-            stopService(new Intent(MainActivity.this, ControlService.class));
+            stopService(new Intent(MainActivity.this, LmsMediaService.class));
             controlServiceMessenger = null;
         }
     }
@@ -1296,12 +1308,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void refreshControlService() {
+    private void refreshLmsMediaService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return;
         }
         if (controlServiceMessenger!=null) {
-            Message msg = Message.obtain(null, ControlService.PLAYER_REFRESH);
+            Message msg = Message.obtain(null, LmsMediaService.PLAYER_REFRESH);
             try {
                 controlServiceMessenger.send(msg);
             } catch (RemoteException e) {
