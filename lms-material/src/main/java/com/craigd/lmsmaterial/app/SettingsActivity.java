@@ -115,7 +115,7 @@ public class SettingsActivity extends AppCompatActivity {
             if (sharedPreferences.getBoolean(STOP_APP_ON_QUIT_PREF_KEY, false)) {
                 localPlayer.stop();
             }
-            stopService(new Intent(this, ControlService.class));
+            stopService(new Intent(this, LmsMediaService.class));
             finishAffinity();
             localPlayer.autoStop();
             System.exit(0);
@@ -385,7 +385,7 @@ public class SettingsActivity extends AppCompatActivity {
             }
             if (NOTIFCATIONS_PREF_KEY.equals(key)) {
                 updateListSummary(key);
-                if (! ControlService.NO_NOTIFICATION.equals(sharedPreferences.getString(key, ControlService.NO_NOTIFICATION))) {
+                if (! LmsMediaService.NO_NOTIFICATION.equals(sharedPreferences.getString(key, LmsMediaService.NO_NOTIFICATION))) {
                     activity.checkNotificationPermission();
                 } else {
                     resetOnCall();
@@ -448,9 +448,9 @@ public class SettingsActivity extends AppCompatActivity {
                 return;
             }
             ListPreference pref = getPreferenceManager().findPreference(NOTIFCATIONS_PREF_KEY);
-            String current = null==pref ? ControlService.NO_NOTIFICATION : pref.getValue();
+            String current = null==pref ? LmsMediaService.NO_NOTIFICATION : pref.getValue();
 
-            if (!ControlService.NO_NOTIFICATION.equals(val) && !ControlService.NO_NOTIFICATION.equals(current)) {
+            if (!LmsMediaService.NO_NOTIFICATION.equals(val) && !LmsMediaService.NO_NOTIFICATION.equals(current)) {
                 // Already enabled
                 return;
             }
@@ -461,7 +461,7 @@ public class SettingsActivity extends AppCompatActivity {
             editor.apply();
             updateListSummary(NOTIFCATIONS_PREF_KEY);
 
-            if (ControlService.NO_NOTIFICATION.equals(val)) {
+            if (LmsMediaService.NO_NOTIFICATION.equals(val)) {
                 resetOnCall();
             }
         }
@@ -476,7 +476,7 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     public void checkNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID)) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Utils.notificationAllowed(this, LmsMediaService.NOTIFICATION_CHANNEL_ID)) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, PERMISSION_POST_NOTIFICATIONS);
         }
     }
@@ -484,7 +484,7 @@ public class SettingsActivity extends AppCompatActivity {
     @RequiresApi(api = Build.VERSION_CODES.TIRAMISU)
     public void checkOnCallAndNotifPermission() {
         boolean reqPhoneState = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED,
-                reqNotify = !Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID);
+                reqNotify = !Utils.notificationAllowed(this, LmsMediaService.NOTIFICATION_CHANNEL_ID);
 
         if (reqPhoneState && reqNotify) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE}, PERMISSION_NOTIFS_AND_READ_PHONE_STATE);
@@ -493,7 +493,7 @@ public class SettingsActivity extends AppCompatActivity {
         } else if (reqPhoneState) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_PHONE_STATE}, PERMISSION_READ_PHONE_STATE);
         } else  {
-            fragment.setNotifications(ControlService.FULL_NOTIFICATION);
+            fragment.setNotifications(LmsMediaService.FULL_NOTIFICATION);
         }
     }
 
@@ -501,7 +501,7 @@ public class SettingsActivity extends AppCompatActivity {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_PHONE_STATE}, PERMISSION_READ_PHONE_STATE);
         } else  {
-            fragment.setNotifications(ControlService.FULL_NOTIFICATION);
+            fragment.setNotifications(LmsMediaService.FULL_NOTIFICATION);
         }
     }
 
@@ -512,26 +512,26 @@ public class SettingsActivity extends AppCompatActivity {
                 if (grantResults[0] != PackageManager.PERMISSION_GRANTED) {
                     fragment.resetOnCall();
                 } else {
-                    fragment.setNotifications(ControlService.FULL_NOTIFICATION);
+                    fragment.setNotifications(LmsMediaService.FULL_NOTIFICATION);
                 }
                 return;
             }
             case PERMISSION_POST_NOTIFICATIONS: {
                 if (grantResults[0] != PackageManager.PERMISSION_GRANTED) {
-                    fragment.setNotifications(ControlService.NO_NOTIFICATION);
+                    fragment.setNotifications(LmsMediaService.NO_NOTIFICATION);
                 } else {
-                    fragment.setNotifications(ControlService.FULL_NOTIFICATION);
+                    fragment.setNotifications(LmsMediaService.FULL_NOTIFICATION);
                 }
                 return;
             }
             case PERMISSION_NOTIFS_AND_READ_PHONE_STATE:
                 if (grantResults[0] != PackageManager.PERMISSION_GRANTED) {
-                    fragment.setNotifications(ControlService.NO_NOTIFICATION);
+                    fragment.setNotifications(LmsMediaService.NO_NOTIFICATION);
                     fragment.resetOnCall();
                 } else if (grantResults[1] != PackageManager.PERMISSION_GRANTED) {
                     fragment.resetOnCall();
                 } else {
-                    fragment.setNotifications(ControlService.FULL_NOTIFICATION);
+                    fragment.setNotifications(LmsMediaService.FULL_NOTIFICATION);
                 }
                 return;
         }

@@ -16,7 +16,6 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -37,6 +36,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
+import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
@@ -45,12 +45,14 @@ import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.core.content.ContextCompat;
+import androidx.media.MediaBrowserServiceCompat;
 import androidx.media.VolumeProviderCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
 import androidx.media.session.MediaButtonReceiver;
@@ -64,18 +66,19 @@ import org.eclipse.jetty.util.B64Code;
 import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
-public class ControlService extends Service {
+public class LmsMediaService extends MediaBrowserServiceCompat {
     public static final String NO_NOTIFICATION = "none";
     public static final String BASIC_NOTIFICATION = "basic";
     public static final String FULL_NOTIFICATION = "full";
-    private static final String NEXT_TRACK = ControlService.class.getCanonicalName() + ".NEXT_TRACK";
-    private static final String PREV_TRACK = ControlService.class.getCanonicalName() + ".PREV_TRACK";
-    private static final String PLAY_TRACK = ControlService.class.getCanonicalName() + ".PLAY_TRACK";
-    private static final String PAUSE_TRACK = ControlService.class.getCanonicalName() + ".PAUSE_TRACK";
-    private static final String QUIT_APP = ControlService.class.getCanonicalName() + ".QUIT";
+    private static final String NEXT_TRACK = LmsMediaService.class.getCanonicalName() + ".NEXT_TRACK";
+    private static final String PREV_TRACK = LmsMediaService.class.getCanonicalName() + ".PREV_TRACK";
+    private static final String PLAY_TRACK = LmsMediaService.class.getCanonicalName() + ".PLAY_TRACK";
+    private static final String PAUSE_TRACK = LmsMediaService.class.getCanonicalName() + ".PAUSE_TRACK";
+    private static final String QUIT_APP = LmsMediaService.class.getCanonicalName() + ".QUIT";
     public static final int ACTIVE_PLAYER = 1;
     public static final int PLAYER_REFRESH = 2;
     public static final int CHECK_COMET_CONNECTION = 3;
@@ -112,29 +115,31 @@ public class ControlService extends Service {
     private Bitmap currentBitmap = null;
     private Bitmap fallbackBitmap = null;
     private Handler handler;
-    private Executor executor= null;
+    private Executor executor = null;
     private ConnectionChangeListener connectionChangeListener;
     private final Messenger messenger = new Messenger(new IncomingHandler(this));
+    private LmsBrowseHelper browseHelper;
+    private Executor browseExecutor;
 
     private static class IncomingHandler extends Handler {
-        private final WeakReference<ControlService> serviceRef;
-        public IncomingHandler(ControlService service) {
+        private final WeakReference<LmsMediaService> serviceRef;
+        public IncomingHandler(LmsMediaService service) {
             super(Looper.getMainLooper());
             serviceRef = new WeakReference<>(service);
         }
         @Override
         public void handleMessage(@NonNull Message msg) {
             Utils.debug("Handle message " + msg.what);
-            ControlService srv = serviceRef.get();
-            if (null==srv) {
+            LmsMediaService srv = serviceRef.get();
+            if (null == srv) {
                 super.handleMessage(msg);
                 return;
             }
-            if (msg.what == ACTIVE_PLAYER && null!=srv.notificationBuilder && null!=srv.notificationManager) {
-                String[] vals = (String[])msg.obj;
+            if (msg.what == ACTIVE_PLAYER && null != srv.notificationBuilder && null != srv.notificationManager) {
+                String[] vals = (String[]) msg.obj;
                 Utils.debug("Set notification player name " + vals[1] + ", id:" + vals[0]);
                 srv.notificationBuilder.setContentTitle(vals[1]);
-                if (FULL_NOTIFICATION.equals(srv.notificationType) && null!=srv.cometClient) {
+                if (FULL_NOTIFICATION.equals(srv.notificationType) && null != srv.cometClient) {
                     srv.cometClient.setPlayer(vals[0]);
                     if (!srv.cometClient.isConnected()) {
                         srv.cometClient.connect();
@@ -144,13 +149,13 @@ public class ControlService extends Service {
                     return;
                 }
                 srv.updateNotification();
-            } else if (msg.what == PLAYER_REFRESH && null!=srv.notificationBuilder && null!=srv.notificationManager) {
-                if (FULL_NOTIFICATION.equals(srv.notificationType) && null!=srv.cometClient && !srv.cometClient.isConnected()) {
+            } else if (msg.what == PLAYER_REFRESH && null != srv.notificationBuilder && null != srv.notificationManager) {
+                if (FULL_NOTIFICATION.equals(srv.notificationType) && null != srv.cometClient && !srv.cometClient.isConnected()) {
                     Utils.debug("Connect comet client");
                     srv.cometClient.connect();
                 }
                 srv.createNotification();
-            } else if (msg.what == CHECK_COMET_CONNECTION && null!=srv.cometClient && FULL_NOTIFICATION.equals(srv.notificationType)) {
+            } else if (msg.what == CHECK_COMET_CONNECTION && null != srv.cometClient && FULL_NOTIFICATION.equals(srv.notificationType)) {
                 srv.cometClient.reconnectIfChanged();
             } else {
                 super.handleMessage(msg);
@@ -159,15 +164,15 @@ public class ControlService extends Service {
     }
 
     public static class ConnectionChangeListener extends BroadcastReceiver {
-        private final ControlService service;
+        private final LmsMediaService service;
 
-        ConnectionChangeListener(ControlService service) {
+        ConnectionChangeListener(LmsMediaService service) {
             this.service = service;
         }
 
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (null==service) {
+            if (null == service) {
                 return;
             }
             if (ConnectivityManager.CONNECTIVITY_ACTION.equals(intent.getAction())) {
@@ -176,9 +181,42 @@ public class ControlService extends Service {
         }
     }
 
-    public ControlService() {
+    public LmsMediaService() {
         handler = new Handler(Looper.getMainLooper());
     }
+
+    // --- MediaBrowserServiceCompat overrides ---
+
+    @Nullable
+    @Override
+    public BrowserRoot onGetRoot(@NonNull String clientPackageName, int clientUid, @Nullable Bundle rootHints) {
+        return new BrowserRoot(LmsBrowseHelper.ROOT_ID, null);
+    }
+
+    @Override
+    public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
+        result.detach();
+        getBrowseExecutor().execute(() -> {
+            List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().loadChildren(parentId);
+            result.sendResult(items);
+        });
+    }
+
+    private synchronized LmsBrowseHelper getBrowseHelper() {
+        if (browseHelper == null) {
+            browseHelper = new LmsBrowseHelper(getApplicationContext());
+        }
+        return browseHelper;
+    }
+
+    private synchronized Executor getBrowseExecutor() {
+        if (browseExecutor == null) {
+            browseExecutor = Executors.newSingleThreadExecutor();
+        }
+        return browseExecutor;
+    }
+
+    // --- Existing ControlService logic ---
 
     private void networkConnectivityChanged() {
         Utils.debug("");
@@ -195,8 +233,7 @@ public class ControlService extends Service {
     }
 
     public synchronized void updatePlayerStatus(PlayerStatus status) {
-        // Sometimes position on first song can be wrong?
-        if (null!=cometClient && cometClient.isConnected() && null!=status && (null==lastStatus || (status.id.equals(lastStatus.id) && !lastStatus.isPlaying && status.isPlaying))) {
+        if (null != cometClient && cometClient.isConnected() && null != status && (null == lastStatus || (status.id.equals(lastStatus.id) && !lastStatus.isPlaying && status.isPlaying))) {
             cometClient.getPlayerStatus(status.id);
         }
         lastStatus = status;
@@ -205,14 +242,11 @@ public class ControlService extends Service {
 
     @Override
     public IBinder onBind(Intent intent) {
+        if (SERVICE_INTERFACE.equals(intent.getAction())) {
+            return super.onBind(intent);
+        }
         Utils.debug("");
         return messenger.getBinder();
-    }
-
-    @Override
-    public boolean onUnbind(Intent intent) {
-        Utils.debug("");
-        return super.onUnbind(intent);
     }
 
     @Override
@@ -220,9 +254,8 @@ public class ControlService extends Service {
         super.onCreate();
         Utils.debug("");
         cometClient = new CometClient(this);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            mediaSession = new MediaSessionCompat(getApplicationContext(), "Lyrion");
-        }
+        mediaSession = new MediaSessionCompat(getApplicationContext(), "Lyrion");
+        setSessionToken(mediaSession.getSessionToken());
         startForegroundService();
     }
 
@@ -245,7 +278,7 @@ public class ControlService extends Service {
             rpc = new JsonRpc(getApplicationContext());
         }
         rpc.sendMessage(MainActivity.activePlayer, command);
-        if (FULL_NOTIFICATION.equals(notificationType) && null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
+        if (FULL_NOTIFICATION.equals(notificationType) && null != cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
             cometClient.connect();
         }
     }
@@ -266,7 +299,7 @@ public class ControlService extends Service {
                 quit();
             }
         }
-        if (null!=mediaSession) {
+        if (null != mediaSession) {
             MediaButtonReceiver.handleIntent(mediaSession, intent);
         }
         super.onStartCommand(intent, flags, startId);
@@ -287,21 +320,21 @@ public class ControlService extends Service {
     }
 
     private void initialiseCometClient() {
-        if (null==prefs) {
+        if (null == prefs) {
             prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         }
         String setting = prefs.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, NO_NOTIFICATION);
         if (!setting.equals(FULL_NOTIFICATION)) {
             cometClient.disconnect();
-            if (null!=connectionChangeListener) {
+            if (null != connectionChangeListener) {
                 unregisterReceiver(connectionChangeListener);
                 connectionChangeListener = null;
             }
         } else {
             cometClient.connect();
-            if (null==connectionChangeListener) {
+            if (null == connectionChangeListener) {
                 connectionChangeListener = new ConnectionChangeListener(this);
-                IntentFilter filter =  new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
+                IntentFilter filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
                 registerReceiver(connectionChangeListener, filter);
             }
         }
@@ -325,9 +358,9 @@ public class ControlService extends Service {
 
     @NonNull
     private PendingIntent getPendingIntent(@NonNull String action) {
-        Intent intent = new Intent(this, ControlService.class);
+        Intent intent = new Intent(this, LmsMediaService.class);
         intent.setAction(action);
-        return PendingIntent.getService(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        return PendingIntent.getService(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
     private MediaStyle getMediaStyle() {
@@ -345,7 +378,7 @@ public class ControlService extends Service {
     }
 
     private synchronized Bitmap getFallback() {
-        if (null==fallbackBitmap) {
+        if (null == fallbackBitmap) {
             fallbackBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.notification_image);
         }
         return fallbackBitmap;
@@ -363,7 +396,7 @@ public class ControlService extends Service {
             PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent,
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_UPDATE_CURRENT);
             boolean statusValid = false;
-            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
+            if (null != lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
                 statusValid = true;
             } else {
                 lastStatus = null;
@@ -402,21 +435,21 @@ public class ControlService extends Service {
                 PlaybackStateCompat.Builder playbackStateBuilder = new PlaybackStateCompat.Builder();
                 if (statusValid) {
                     playbackStateBuilder.setState(lastStatus.isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_STOPPED, lastStatus.time, lastStatus.isPlaying ? 1.0f : 0)
-                                        .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO);
+                            .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID);
                 } else {
                     playbackStateBuilder.setState(PlaybackStateCompat.STATE_STOPPED, 0, 0)
-                                        .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT);
+                            .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID);
                 }
                 playbackStateBuilder.addCustomAction(ACTION_POWER, getString(R.string.power), android.R.drawable.ic_lock_power_off)
                         .addCustomAction(ACTION_QUIT, getString(R.string.quit), R.drawable.ic_action_quit);
                 playbackState = playbackStateBuilder.build();
                 mediaSession.setPlaybackState(playbackState);
-                if (mediaSessionCallback==null) {
-                    mediaSessionCallback=new MediaSessionCompat.Callback() {
+                if (mediaSessionCallback == null) {
+                    mediaSessionCallback = new MediaSessionCompat.Callback() {
                         @Override
                         public void onPlay() {
                             Utils.debug("");
-                            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
+                            if (null != lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
                                 sendCommand(PLAY_COMMAND);
                             } else {
                                 mediaSession.setPlaybackState(null);
@@ -443,7 +476,24 @@ public class ControlService extends Service {
 
                         @Override
                         public void onSeekTo(long pos) {
-                            sendCommand(new String[]{"time", Double.toString(pos/1000.0)});
+                            sendCommand(new String[]{"time", Double.toString(pos / 1000.0)});
+                        }
+
+                        @Override
+                        public void onPlayFromMediaId(String mediaId, Bundle extras) {
+                            Utils.debug("playFromMediaId: " + mediaId);
+                            getBrowseHelper().playMediaId(mediaId);
+                        }
+
+                        @Override
+                        public void onPlayFromSearch(String query, Bundle extras) {
+                            Utils.debug("playFromSearch: " + query);
+                            if (query != null && !query.isEmpty() && !Utils.isEmpty(MainActivity.activePlayer)) {
+                                if (null == rpc) {
+                                    rpc = new JsonRpc(getApplicationContext());
+                                }
+                                rpc.sendMessage(MainActivity.activePlayer, new String[]{"playlist", "play", query});
+                            }
                         }
 
                         @Override
@@ -465,7 +515,7 @@ public class ControlService extends Service {
                     mediaSession.setPlaybackToRemote(new VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_RELATIVE, 50, 1) {
                         @Override
                         public void onAdjustVolume(int direction) {
-                            Utils.debug(""+direction);
+                            Utils.debug("" + direction);
                             if (direction > 0) {
                                 sendCommand(INC_VOLUME_COMMAND);
                             } else if (direction < 0) {
@@ -521,7 +571,7 @@ public class ControlService extends Service {
     private void fetchCover(MediaMetadataCompat.Builder metaBuilder) {
         currentCover = null;
         Utils.debug(lastStatus.cover);
-        if (null==executor) {
+        if (null == executor) {
             executor = Executors.newSingleThreadExecutor();
         }
         executor.execute(() -> {
@@ -535,31 +585,33 @@ public class ControlService extends Service {
                 }
 
                 currentBitmap = BitmapFactory.decodeStream(con.getInputStream());
-                if (null!=currentBitmap) {
+                if (null != currentBitmap) {
                     currentCover = lastStatus.cover;
                 }
                 handler.post(() -> {
-                    metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentBitmap==null ? getFallback() : currentBitmap);
+                    metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentBitmap == null ? getFallback() : currentBitmap);
                     mediaSession.setMetadata(metaBuilder.build());
                     mediaSession.setActive(true);
                     updateNotification();
                 });
-            } catch (Exception e) { Utils.error("Cover error", e); }
+            } catch (Exception e) {
+                Utils.error("Cover error", e);
+            }
         });
     }
 
     private void createNotification() {
         Utils.debug("");
         Notification notification = updateNotification();
-        if (null==notification) {
+        if (null == notification) {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Utils.debug("startForegroundService");
-            startForegroundService(new Intent(this, ControlService.class));
+            startForegroundService(new Intent(this, LmsMediaService.class));
         } else {
             Utils.debug("startService");
-            startService(new Intent(this, ControlService.class));
+            startService(new Intent(this, LmsMediaService.class));
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -570,7 +622,7 @@ public class ControlService extends Service {
 
     private void stopForegroundService() {
         Utils.debug("");
-        if (mediaSession!=null) {
+        if (mediaSession != null) {
             mediaSession.setActive(false);
         }
         stopForeground(true);
@@ -584,13 +636,14 @@ public class ControlService extends Service {
         @Override
         abstract public void onCallStateChanged(int state);
     }
+
     private boolean callStateListenerRegistered = false;
     private PhoneStateHandler phoneStateHandler = null;
     private final CallStateListener callStateListener = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) ?
             new CallStateListener() {
                 @Override
                 public void onCallStateChanged(int state) {
-                    if (null==phoneStateHandler) {
+                    if (null == phoneStateHandler) {
                         phoneStateHandler = new PhoneStateHandler();
                     }
                     phoneStateHandler.handle(getApplicationContext(), state);
@@ -601,7 +654,7 @@ public class ControlService extends Service {
             new PhoneStateListener() {
                 @Override
                 public void onCallStateChanged(int state, String phoneNumber) {
-                    if (null==phoneStateHandler) {
+                    if (null == phoneStateHandler) {
                         phoneStateHandler = new PhoneStateHandler();
                     }
                     phoneStateHandler.handle(getApplicationContext(), state);
@@ -610,7 +663,7 @@ public class ControlService extends Service {
             : null;
 
     private void registerCallStateListener() {
-        Utils.debug("callStateListenerRegistered:"+callStateListenerRegistered);
+        Utils.debug("callStateListenerRegistered:" + callStateListenerRegistered);
         if (!callStateListenerRegistered) {
             TelephonyManager telephonyManager = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -629,7 +682,7 @@ public class ControlService extends Service {
     }
 
     private void unregisterCallStateListener() {
-        Utils.debug("callStateListenerRegistered:"+callStateListenerRegistered);
+        Utils.debug("callStateListenerRegistered:" + callStateListenerRegistered);
         if (callStateListenerRegistered) {
             TelephonyManager telephonyManager = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

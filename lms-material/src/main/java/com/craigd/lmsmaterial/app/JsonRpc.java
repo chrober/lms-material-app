@@ -20,6 +20,7 @@ import com.android.volley.AuthFailureError;
 import com.android.volley.RequestQueue;
 import com.android.volley.Response;
 import com.android.volley.toolbox.JsonObjectRequest;
+import com.android.volley.toolbox.RequestFuture;
 import com.android.volley.toolbox.Volley;
 
 import org.eclipse.jetty.util.B64Code;
@@ -28,14 +29,19 @@ import org.json.JSONObject;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class JsonRpc {
     private final RequestQueue requestQueue;
-    private final SharedPreferences prefs ;
+    private final SharedPreferences prefs;
 
     private class Request extends JsonObjectRequest {
         public Request(String url, @Nullable JSONObject request, Response.Listener<JSONObject> responseListener) {
-            super(Request.Method.POST, url, request, responseListener, null);
+            super(Method.POST, url, request, responseListener, null);
+        }
+
+        public Request(String url, @Nullable JSONObject request, RequestFuture<JSONObject> future) {
+            super(Method.POST, url, request, future, future);
         }
 
         @Override
@@ -44,14 +50,14 @@ public class JsonRpc {
             String pass = prefs.getString(LMS_PASSWORD_KEY, "");
 
             if (user.isEmpty() || pass.isEmpty()) {
-                return  super.getHeaders();
+                return super.getHeaders();
             }
 
             Map<String, String> headers = new HashMap<>();
             headers.put("Authorization", "Basic " + B64Code.encode(user + ":" + pass));
             return headers;
         }
-    };
+    }
 
     public JsonRpc(Context context) {
         prefs = PreferenceManager.getDefaultSharedPreferences(context);
@@ -84,5 +90,35 @@ public class JsonRpc {
                 Utils.error("Failed to send control message", e);
             }
         }
+    }
+
+    public JSONObject sendMessageSync(String id, String[] command, int timeoutMs) throws Exception {
+        ServerDiscovery.Server server = new ServerDiscovery.Server(prefs.getString(SettingsActivity.SERVER_PREF_KEY, null));
+        if (null == server.ip) {
+            return null;
+        }
+        JSONObject request = new JSONObject();
+        JSONArray params = new JSONArray();
+        JSONArray cmd = new JSONArray();
+        params.put(0, id);
+        for (String c : command) {
+            cmd.put(cmd.length(), c);
+        }
+        params.put(1, cmd);
+        request.put("id", 1);
+        request.put("method", "slim.request");
+        request.put("params", params);
+
+        RequestFuture<JSONObject> future = RequestFuture.newFuture();
+        requestQueue.add(new Request("http://" + server.ip + ":" + server.port + "/jsonrpc.js", request, future));
+        return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    public String getServerUrl() {
+        ServerDiscovery.Server server = new ServerDiscovery.Server(prefs.getString(SettingsActivity.SERVER_PREF_KEY, null));
+        if (null == server.ip) {
+            return null;
+        }
+        return "http://" + server.ip + ":" + server.port;
     }
 }
