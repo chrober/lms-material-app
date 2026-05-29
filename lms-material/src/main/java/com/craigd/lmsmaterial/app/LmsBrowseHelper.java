@@ -39,10 +39,12 @@ public class LmsBrowseHelper {
 
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
+    private final String packageName;
 
     public LmsBrowseHelper(Context context) {
         rpc = new JsonRpc(context);
         prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        packageName = context.getPackageName();
     }
 
     public List<MediaBrowserCompat.MediaItem> loadChildren(String parentMediaId) {
@@ -113,7 +115,7 @@ public class LmsBrowseHelper {
             if (items.size() >= 6) break;
         }
 
-        items.add(buildBrowsableItem(PLAYERS_ID, "Players", null));
+        items.add(buildBrowsableItem(PLAYERS_ID, "Players", drawableUri(R.drawable.ic_speaker)));
         return items;
     }
 
@@ -124,21 +126,21 @@ public class LmsBrowseHelper {
     private MediaBrowserCompat.MediaItem mapHomeItemToMediaItem(String stdId) {
         switch (stdId) {
             case "std_favorites":
-                return buildBrowsableItem(FAVORITES_ID, "Favorites", null);
+                return buildBrowsableItem(FAVORITES_ID, "Favorites", drawableUri(R.drawable.ic_favorite));
             case "std_new":
-                return buildBrowsableItem(ALBUMS_NEW_ID, "New Music", null);
+                return buildBrowsableItem(ALBUMS_NEW_ID, "New Music", drawableUri(R.drawable.ic_new_releases));
             case "std_radios":
-                return buildBrowsableItem(RADIOS_ID, "Radio", null);
+                return buildBrowsableItem(RADIOS_ID, "Radio", drawableUri(R.drawable.ic_radio));
             case "std_playlists":
-                return buildBrowsableItem(PLAYLISTS_ID, "Playlists", null);
+                return buildBrowsableItem(PLAYLISTS_ID, "Playlists", drawableUri(R.drawable.ic_playlist));
             case "std_explore":
-                return buildBrowsableItem(ARTISTS_ID, "Artists", null);
+                return buildBrowsableItem(ARTISTS_ID, "Artists", drawableUri(R.drawable.ic_artist));
             case "std_recentlyplayed":
-                return buildBrowsableItem(ALBUMS_RECENT_ID, "Recently Played", null);
+                return buildBrowsableItem(ALBUMS_RECENT_ID, "Recently Played", drawableUri(R.drawable.ic_history));
             case "std_random":
-                return buildBrowsableItem(ALBUMS_RANDOM_ID, "Random", null);
+                return buildBrowsableItem(ALBUMS_RANDOM_ID, "Random", drawableUri(R.drawable.ic_shuffle));
             case "std_playcount":
-                return buildBrowsableItem("__ALBUMS_PLAYCOUNT__", "Most Played", null);
+                return buildBrowsableItem("__ALBUMS_PLAYCOUNT__", "Most Played", drawableUri(R.drawable.ic_star));
             default:
                 return null;
         }
@@ -399,6 +401,10 @@ public class LmsBrowseHelper {
 
     private void switchPlayer(String playerId) {
         MainActivity.activePlayer = playerId;
+    }
+
+    private Uri drawableUri(int resId) {
+        return Uri.parse("android.resource://" + packageName + "/" + resId);
     }
 
     private Uri resolveImageUri(String path) {
