@@ -368,7 +368,6 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             registerReceiver(connectionChangeListener, filter);
         }
     }
-    }
 
     @RequiresApi(Build.VERSION_CODES.O)
     private void createNotificationChannel() {
