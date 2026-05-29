@@ -30,7 +30,9 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.support.v4.media.MediaBrowserCompat;
+import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
@@ -228,6 +230,12 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 @Override
                 public void onPlayFromMediaId(String mediaId, Bundle extras) {
                     Utils.debug("playFromMediaId: " + mediaId);
+                    mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                            .setState(PlaybackStateCompat.STATE_BUFFERING, 0, 0f)
+                            .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE
+                                    | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                                    | PlaybackStateCompat.ACTION_PLAY_PAUSE)
+                            .build());
                     getBrowseHelper().playMediaId(mediaId);
                 }
 
@@ -273,6 +281,41 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         }
         lastStatus = status;
         handler.post(this::updateNotification);
+        handler.post(this::updateMediaSession);
+    }
+
+    private void updateMediaSession() {
+        if (null==mediaSession) {
+            return;
+        }
+        if (null==lastStatus || !lastStatus.id.equals(MainActivity.activePlayer)) {
+            mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                    .setState(PlaybackStateCompat.STATE_NONE, 0, 0f)
+                    .build());
+            return;
+        }
+        long actions = PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE
+                | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_PAUSE;
+        int state = lastStatus.isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED;
+        mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                .setState(state, lastStatus.time * 1000, lastStatus.isPlaying ? 1.0f : 0f)
+                .setActions(actions)
+                .build());
+        MediaMetadataCompat.Builder meta = new MediaMetadataCompat.Builder();
+        if (!Utils.isEmpty(lastStatus.title)) {
+            meta.putString(MediaMetadataCompat.METADATA_KEY_TITLE, lastStatus.title);
+        }
+        if (!Utils.isEmpty(lastStatus.artist)) {
+            meta.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, lastStatus.artist);
+        }
+        if (!Utils.isEmpty(lastStatus.album)) {
+            meta.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, lastStatus.album);
+        }
+        if (lastStatus.duration > 0) {
+            meta.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, lastStatus.duration * 1000);
+        }
+        mediaSession.setMetadata(meta.build());
     }
 
     @Override
@@ -291,6 +334,13 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         cometClient = new CometClient(this);
         mediaSession = new MediaSessionCompat(getApplicationContext(), "Lyrion");
         mediaSession.setCallback(getMediaSessionCallback());
+        mediaSession.setActive(true);
+        mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                .setState(PlaybackStateCompat.STATE_NONE, 0, 0f)
+                .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE
+                        | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                        | PlaybackStateCompat.ACTION_PLAY_PAUSE)
+                .build());
         setSessionToken(mediaSession.getSessionToken());
         startForegroundService();
     }
