@@ -215,7 +215,7 @@ public class LmsBrowseHelper {
                 String artist = album.optString("artist", "");
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildBrowsableItem("album/" + id, title, artist, artUri));
+                items.add(buildBrowsablePlayableItem("album/" + id, title, artist, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load albums", e);
@@ -240,7 +240,7 @@ public class LmsBrowseHelper {
                 String title = album.optString("album", "");
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildBrowsableItem("album/" + id, title, artUri));
+                items.add(buildBrowsablePlayableItem("album/" + id, title, null, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load artist albums", e);
@@ -259,6 +259,7 @@ public class LmsBrowseHelper {
             JSONArray loop = result.optJSONArray("titles_loop");
             if (null==loop) return items;
 
+            items.add(buildPlayableItem("album/" + albumId, "\u25B6 Play All", null, null));
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
                 String id = track.optString("id", "");
@@ -287,7 +288,7 @@ public class LmsBrowseHelper {
                 JSONObject pl = loop.getJSONObject(i);
                 String id = pl.optString("id", "");
                 String name = pl.optString("playlist", "");
-                items.add(buildBrowsableItem("playlist/" + id, name, null));
+                items.add(buildBrowsablePlayableItem("playlist/" + id, name, null, null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load playlists", e);
@@ -306,6 +307,7 @@ public class LmsBrowseHelper {
             JSONArray loop = result.optJSONArray("playlisttracks_loop");
             if (null==loop) return items;
 
+            items.add(buildPlayableItem("playlist/" + playlistId, "\u25B6 Play All", null, null));
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
                 String id = track.optString("id", "");
@@ -424,6 +426,19 @@ public class LmsBrowseHelper {
             desc.setIconUri(iconUri);
         }
         return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsablePlayableItem(String mediaId, String title, String subtitle, Uri iconUri) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE | MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
     }
 
     private MediaBrowserCompat.MediaItem buildPlayableItem(String mediaId, String title, String subtitle, Uri iconUri) {
