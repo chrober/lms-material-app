@@ -94,7 +94,7 @@ public class JsonRpc {
 
     public JSONObject sendMessageSync(String id, String[] command, int timeoutMs) throws Exception {
         ServerDiscovery.Server server = new ServerDiscovery.Server(prefs.getString(SettingsActivity.SERVER_PREF_KEY, null));
-        if (null == server.ip) {
+        if (null==server.ip) {
             return null;
         }
         JSONObject request = new JSONObject();
@@ -116,7 +116,7 @@ public class JsonRpc {
 
     public String getServerUrl() {
         ServerDiscovery.Server server = new ServerDiscovery.Server(prefs.getString(SettingsActivity.SERVER_PREF_KEY, null));
-        if (null == server.ip) {
+        if (null==server.ip) {
             return null;
         }
         return "http://" + server.ip + ":" + server.port;

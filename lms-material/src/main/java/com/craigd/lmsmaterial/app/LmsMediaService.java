@@ -131,15 +131,15 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         public void handleMessage(@NonNull Message msg) {
             Utils.debug("Handle message " + msg.what);
             LmsMediaService srv = serviceRef.get();
-            if (null == srv) {
+            if (null==srv) {
                 super.handleMessage(msg);
                 return;
             }
-            if (msg.what == ACTIVE_PLAYER && null != srv.notificationBuilder && null != srv.notificationManager) {
+            if (msg.what == ACTIVE_PLAYER && null!=srv.notificationBuilder && null!=srv.notificationManager) {
                 String[] vals = (String[]) msg.obj;
                 Utils.debug("Set notification player name " + vals[1] + ", id:" + vals[0]);
                 srv.notificationBuilder.setContentTitle(vals[1]);
-                if (FULL_NOTIFICATION.equals(srv.notificationType) && null != srv.cometClient) {
+                if (FULL_NOTIFICATION.equals(srv.notificationType) && null!=srv.cometClient) {
                     srv.cometClient.setPlayer(vals[0]);
                     if (!srv.cometClient.isConnected()) {
                         srv.cometClient.connect();
@@ -149,13 +149,13 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                     return;
                 }
                 srv.updateNotification();
-            } else if (msg.what == PLAYER_REFRESH && null != srv.notificationBuilder && null != srv.notificationManager) {
-                if (FULL_NOTIFICATION.equals(srv.notificationType) && null != srv.cometClient && !srv.cometClient.isConnected()) {
+            } else if (msg.what == PLAYER_REFRESH && null!=srv.notificationBuilder && null!=srv.notificationManager) {
+                if (FULL_NOTIFICATION.equals(srv.notificationType) && null!=srv.cometClient && !srv.cometClient.isConnected()) {
                     Utils.debug("Connect comet client");
                     srv.cometClient.connect();
                 }
                 srv.createNotification();
-            } else if (msg.what == CHECK_COMET_CONNECTION && null != srv.cometClient && FULL_NOTIFICATION.equals(srv.notificationType)) {
+            } else if (msg.what == CHECK_COMET_CONNECTION && null!=srv.cometClient && FULL_NOTIFICATION.equals(srv.notificationType)) {
                 srv.cometClient.reconnectIfChanged();
             } else {
                 super.handleMessage(msg);
@@ -172,7 +172,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
 
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (null == service) {
+            if (null==service) {
                 return;
             }
             if (ConnectivityManager.CONNECTIVITY_ACTION.equals(intent.getAction())) {
@@ -184,8 +184,6 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     public LmsMediaService() {
         handler = new Handler(Looper.getMainLooper());
     }
-
-    // --- MediaBrowserServiceCompat overrides ---
 
     @Nullable
     @Override
@@ -203,20 +201,18 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     }
 
     private synchronized LmsBrowseHelper getBrowseHelper() {
-        if (browseHelper == null) {
+        if (null==browseHelper) {
             browseHelper = new LmsBrowseHelper(getApplicationContext());
         }
         return browseHelper;
     }
 
     private synchronized Executor getBrowseExecutor() {
-        if (browseExecutor == null) {
+        if (null==browseExecutor) {
             browseExecutor = Executors.newSingleThreadExecutor();
         }
         return browseExecutor;
     }
-
-    // --- Existing ControlService logic ---
 
     private void networkConnectivityChanged() {
         Utils.debug("");
@@ -233,7 +229,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     }
 
     public synchronized void updatePlayerStatus(PlayerStatus status) {
-        if (null != cometClient && cometClient.isConnected() && null != status && (null == lastStatus || (status.id.equals(lastStatus.id) && !lastStatus.isPlaying && status.isPlaying))) {
+        if (null!=cometClient && cometClient.isConnected() && null!=status && (null==lastStatus || (status.id.equals(lastStatus.id) && !lastStatus.isPlaying && status.isPlaying))) {
             cometClient.getPlayerStatus(status.id);
         }
         lastStatus = status;
@@ -263,7 +259,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     public void onDestroy() {
         super.onDestroy();
         Utils.debug("");
-        if (mediaSession != null) {
+        if (null!=mediaSession) {
             mediaSession.setActive(false);
             mediaSession.release();
         }
@@ -274,18 +270,18 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         if (Utils.isEmpty(MainActivity.activePlayer)) {
             return;
         }
-        if (null == rpc) {
+        if (null==rpc) {
             rpc = new JsonRpc(getApplicationContext());
         }
         rpc.sendMessage(MainActivity.activePlayer, command);
-        if (FULL_NOTIFICATION.equals(notificationType) && null != cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
+        if (FULL_NOTIFICATION.equals(notificationType) && null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
             cometClient.connect();
         }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null) {
+        if (null!=intent) {
             String action = intent.getAction();
             if (PREV_TRACK.equals(action)) {
                 sendCommand(PREV_COMMAND);
@@ -299,7 +295,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 quit();
             }
         }
-        if (null != mediaSession) {
+        if (null!=mediaSession) {
             MediaButtonReceiver.handleIntent(mediaSession, intent);
         }
         super.onStartCommand(intent, flags, startId);
@@ -320,19 +316,19 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     }
 
     private void initialiseCometClient() {
-        if (null == prefs) {
+        if (null==prefs) {
             prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         }
         String setting = prefs.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, NO_NOTIFICATION);
         if (!setting.equals(FULL_NOTIFICATION)) {
             cometClient.disconnect();
-            if (null != connectionChangeListener) {
+            if (null!=connectionChangeListener) {
                 unregisterReceiver(connectionChangeListener);
                 connectionChangeListener = null;
             }
         } else {
             cometClient.connect();
-            if (null == connectionChangeListener) {
+            if (null==connectionChangeListener) {
                 connectionChangeListener = new ConnectionChangeListener(this);
                 IntentFilter filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
                 registerReceiver(connectionChangeListener, filter);
@@ -378,7 +374,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     }
 
     private synchronized Bitmap getFallback() {
-        if (null == fallbackBitmap) {
+        if (null==fallbackBitmap) {
             fallbackBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.notification_image);
         }
         return fallbackBitmap;
@@ -396,7 +392,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent,
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_UPDATE_CURRENT);
             boolean statusValid = false;
-            if (null != lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
+            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
                 statusValid = true;
             } else {
                 lastStatus = null;
@@ -405,7 +401,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                     .setOngoing(true)
                     .setOnlyAlertOnce(true)
                     .setSmallIcon(R.drawable.ic_mono_icon)
-                    .setContentTitle(MainActivity.activePlayerName == null || MainActivity.activePlayerName.isEmpty() ? getResources().getString(R.string.no_player) : MainActivity.activePlayerName)
+                    .setContentTitle(null==MainActivity.activePlayerName || MainActivity.activePlayerName.isEmpty() ? getResources().getString(R.string.no_player) : MainActivity.activePlayerName)
                     .setCategory(Notification.CATEGORY_SERVICE)
                     .setContentIntent(pendingIntent)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -444,12 +440,12 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                         .addCustomAction(ACTION_QUIT, getString(R.string.quit), R.drawable.ic_action_quit);
                 playbackState = playbackStateBuilder.build();
                 mediaSession.setPlaybackState(playbackState);
-                if (mediaSessionCallback == null) {
+                if (null==mediaSessionCallback) {
                     mediaSessionCallback = new MediaSessionCompat.Callback() {
                         @Override
                         public void onPlay() {
                             Utils.debug("");
-                            if (null != lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
+                            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
                                 sendCommand(PLAY_COMMAND);
                             } else {
                                 mediaSession.setPlaybackState(null);
@@ -488,8 +484,8 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                         @Override
                         public void onPlayFromSearch(String query, Bundle extras) {
                             Utils.debug("playFromSearch: " + query);
-                            if (query != null && !query.isEmpty() && !Utils.isEmpty(MainActivity.activePlayer)) {
-                                if (null == rpc) {
+                            if (null!=query && !query.isEmpty() && !Utils.isEmpty(MainActivity.activePlayer)) {
+                                if (null==rpc) {
                                     rpc = new JsonRpc(getApplicationContext());
                                 }
                                 rpc.sendMessage(MainActivity.activePlayer, new String[]{"playlist", "play", query});
@@ -525,7 +521,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                     });
                 }
 
-                String title = MainActivity.activePlayerName == null || MainActivity.activePlayerName.isEmpty() ? getResources().getString(R.string.no_player) : MainActivity.activePlayerName;
+                String title = null==MainActivity.activePlayerName || MainActivity.activePlayerName.isEmpty() ? getResources().getString(R.string.no_player) : MainActivity.activePlayerName;
                 MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder();
                 metaBuilder.putString(MediaMetadata.METADATA_KEY_ARTIST, title);
 
@@ -571,7 +567,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     private void fetchCover(MediaMetadataCompat.Builder metaBuilder) {
         currentCover = null;
         Utils.debug(lastStatus.cover);
-        if (null == executor) {
+        if (null==executor) {
             executor = Executors.newSingleThreadExecutor();
         }
         executor.execute(() -> {
@@ -585,11 +581,11 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 }
 
                 currentBitmap = BitmapFactory.decodeStream(con.getInputStream());
-                if (null != currentBitmap) {
+                if (null!=currentBitmap) {
                     currentCover = lastStatus.cover;
                 }
                 handler.post(() -> {
-                    metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentBitmap == null ? getFallback() : currentBitmap);
+                    metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, null==currentBitmap ? getFallback() : currentBitmap);
                     mediaSession.setMetadata(metaBuilder.build());
                     mediaSession.setActive(true);
                     updateNotification();
@@ -603,7 +599,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     private void createNotification() {
         Utils.debug("");
         Notification notification = updateNotification();
-        if (null == notification) {
+        if (null==notification) {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -622,7 +618,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
 
     private void stopForegroundService() {
         Utils.debug("");
-        if (mediaSession != null) {
+        if (null!=mediaSession) {
             mediaSession.setActive(false);
         }
         stopForeground(true);
@@ -643,7 +639,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             new CallStateListener() {
                 @Override
                 public void onCallStateChanged(int state) {
-                    if (null == phoneStateHandler) {
+                    if (null==phoneStateHandler) {
                         phoneStateHandler = new PhoneStateHandler();
                     }
                     phoneStateHandler.handle(getApplicationContext(), state);
@@ -654,7 +650,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             new PhoneStateListener() {
                 @Override
                 public void onCallStateChanged(int state, String phoneNumber) {
-                    if (null == phoneStateHandler) {
+                    if (null==phoneStateHandler) {
                         phoneStateHandler = new PhoneStateHandler();
                     }
                     phoneStateHandler.handle(getApplicationContext(), state);
