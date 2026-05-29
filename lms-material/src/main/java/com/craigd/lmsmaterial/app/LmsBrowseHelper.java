@@ -64,6 +64,9 @@ public class LmsBrowseHelper {
             return loadRadios();
         } else if (PLAYERS_ID.equals(parentMediaId)) {
             return loadPlayers();
+        } else if (parentMediaId.startsWith("player/")) {
+            switchPlayer(parentMediaId.substring(7));
+            return loadRoot();
         } else if (parentMediaId.startsWith("artist/")) {
             return loadArtistAlbums(parentMediaId.substring(7));
         } else if (parentMediaId.startsWith("album/")) {
@@ -79,12 +82,21 @@ public class LmsBrowseHelper {
         String homeItemsJson = prefs.getString(PREFS_HOME_ITEMS_KEY, null);
         String[] homeItems;
 
-        if (null!=homeItemsJson) {
+        if (null!=homeItemsJson && !homeItemsJson.isEmpty() && !"[]".equals(homeItemsJson)) {
             try {
                 JSONArray arr = new JSONArray(homeItemsJson);
-                homeItems = new String[arr.length()];
-                for (int i = 0; i < arr.length(); i++) {
-                    homeItems[i] = arr.getString(i);
+                if (arr.length() > 0) {
+                    homeItems = new String[arr.length()];
+                    for (int i = 0; i < arr.length(); i++) {
+                        Object element = arr.get(i);
+                        if (element instanceof JSONObject) {
+                            homeItems[i] = ((JSONObject) element).optString("id", "");
+                        } else {
+                            homeItems[i] = arr.getString(i);
+                        }
+                    }
+                } else {
+                    homeItems = getDefaultHomeItems();
                 }
             } catch (Exception e) {
                 homeItems = getDefaultHomeItems();
@@ -351,7 +363,7 @@ public class LmsBrowseHelper {
                 String name = player.optString("name", "");
                 boolean isConnected = player.optInt("connected", 0) == 1;
                 String subtitle = isConnected ? "Connected" : "Disconnected";
-                items.add(buildPlayableItem("player/" + id, name, subtitle, null));
+                items.add(buildBrowsableItem("player/" + id, name + " (" + subtitle + ")", null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load players", e);
@@ -359,18 +371,21 @@ public class LmsBrowseHelper {
         return items;
     }
 
-    public void playMediaId(String mediaId) {
+    public boolean playMediaId(String mediaId) {
         if (mediaId.startsWith("album/")) {
             sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
+            return true;
         } else if (mediaId.startsWith("track/")) {
             sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "track_id:" + mediaId.substring(6)});
+            return true;
         } else if (mediaId.startsWith("playlist/")) {
             sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "playlist_id:" + mediaId.substring(9)});
+            return true;
         } else if (mediaId.startsWith("favorite/")) {
             sendPlayCommand(new String[]{"favorites", "playlist", "play", "item_id:" + mediaId.substring(9)});
-        } else if (mediaId.startsWith("player/")) {
-            switchPlayer(mediaId.substring(7));
+            return true;
         }
+        return false;
     }
 
     private void sendPlayCommand(String[] command) {
