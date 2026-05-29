@@ -214,6 +214,77 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         return browseExecutor;
     }
 
+    private synchronized MediaSessionCompat.Callback getMediaSessionCallback() {
+        if (null==mediaSessionCallback) {
+            mediaSessionCallback = new MediaSessionCompat.Callback() {
+                @Override
+                public void onPlay() {
+                    Utils.debug("");
+                    if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && FULL_NOTIFICATION.equals(notificationType)) {
+                        sendCommand(PLAY_COMMAND);
+                    } else {
+                        mediaSession.setPlaybackState(null);
+                        sendCommand(TOGGLE_PLAY_PAUSE_COMMAND);
+                        mediaSession.setPlaybackState(playbackState);
+                    }
+                }
+
+                @Override
+                public void onPause() {
+                    Utils.debug("");
+                    sendCommand(PAUSE_COMMAND);
+                }
+
+                @Override
+                public void onSkipToNext() {
+                    sendCommand(NEXT_COMMAND);
+                }
+
+                @Override
+                public void onSkipToPrevious() {
+                    sendCommand(PREV_COMMAND);
+                }
+
+                @Override
+                public void onSeekTo(long pos) {
+                    sendCommand(new String[]{"time", Double.toString(pos / 1000.0)});
+                }
+
+                @Override
+                public void onPlayFromMediaId(String mediaId, Bundle extras) {
+                    Utils.debug("playFromMediaId: " + mediaId);
+                    if (getBrowseHelper().playMediaId(mediaId)) {
+                        mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                                .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1.0f)
+                                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID)
+                                .build());
+                    }
+                }
+
+                @Override
+                public void onPlayFromSearch(String query, Bundle extras) {
+                    Utils.debug("playFromSearch: " + query);
+                    if (null!=query && !query.isEmpty() && !Utils.isEmpty(MainActivity.activePlayer)) {
+                        if (null==rpc) {
+                            rpc = new JsonRpc(getApplicationContext());
+                        }
+                        rpc.sendMessage(MainActivity.activePlayer, new String[]{"playlist", "play", query});
+                    }
+                }
+
+                @Override
+                public void onCustomAction(String action, Bundle extras) {
+                    if (ACTION_QUIT.equals(action)) {
+                        quit();
+                    } else if (ACTION_POWER.equals(action)) {
+                        sendCommand(POWER_COMMAND);
+                    }
+                }
+            };
+        }
+        return mediaSessionCallback;
+    }
+
     private void networkConnectivityChanged() {
         Utils.debug("");
         if (FULL_NOTIFICATION.equals(notificationType)) {
@@ -251,6 +322,9 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         Utils.debug("");
         cometClient = new CometClient(this);
         mediaSession = new MediaSessionCompat(getApplicationContext(), "Lyrion");
+        mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        mediaSession.setCallback(getMediaSessionCallback());
+        mediaSession.setActive(true);
         setSessionToken(mediaSession.getSessionToken());
         startForegroundService();
     }
@@ -440,70 +514,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                         .addCustomAction(ACTION_QUIT, getString(R.string.quit), R.drawable.ic_action_quit);
                 playbackState = playbackStateBuilder.build();
                 mediaSession.setPlaybackState(playbackState);
-                if (null==mediaSessionCallback) {
-                    mediaSessionCallback = new MediaSessionCompat.Callback() {
-                        @Override
-                        public void onPlay() {
-                            Utils.debug("");
-                            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
-                                sendCommand(PLAY_COMMAND);
-                            } else {
-                                mediaSession.setPlaybackState(null);
-                                sendCommand(TOGGLE_PLAY_PAUSE_COMMAND);
-                                mediaSession.setPlaybackState(playbackState);
-                            }
-                        }
-
-                        @Override
-                        public void onPause() {
-                            Utils.debug("");
-                            sendCommand(PAUSE_COMMAND);
-                        }
-
-                        @Override
-                        public void onSkipToNext() {
-                            sendCommand(NEXT_COMMAND);
-                        }
-
-                        @Override
-                        public void onSkipToPrevious() {
-                            sendCommand(PREV_COMMAND);
-                        }
-
-                        @Override
-                        public void onSeekTo(long pos) {
-                            sendCommand(new String[]{"time", Double.toString(pos / 1000.0)});
-                        }
-
-                        @Override
-                        public void onPlayFromMediaId(String mediaId, Bundle extras) {
-                            Utils.debug("playFromMediaId: " + mediaId);
-                            getBrowseHelper().playMediaId(mediaId);
-                        }
-
-                        @Override
-                        public void onPlayFromSearch(String query, Bundle extras) {
-                            Utils.debug("playFromSearch: " + query);
-                            if (null!=query && !query.isEmpty() && !Utils.isEmpty(MainActivity.activePlayer)) {
-                                if (null==rpc) {
-                                    rpc = new JsonRpc(getApplicationContext());
-                                }
-                                rpc.sendMessage(MainActivity.activePlayer, new String[]{"playlist", "play", query});
-                            }
-                        }
-
-                        @Override
-                        public void onCustomAction(String action, Bundle extras) {
-                            if (ACTION_QUIT.equals(action)) {
-                                quit();
-                            } else if (ACTION_POWER.equals(action)) {
-                                sendCommand(POWER_COMMAND);
-                            }
-                        }
-                    };
-                }
-                mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
-                mediaSession.setCallback(mediaSessionCallback);
+                mediaSession.setCallback(getMediaSessionCallback());
 
                 if (prefs.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true)) {
                     mediaSession.setPlaybackToLocal(AudioManager.STREAM_MUSIC);

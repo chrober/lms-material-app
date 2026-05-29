@@ -215,7 +215,7 @@ public class LmsBrowseHelper {
                 String artist = album.optString("artist", "");
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                items.add(buildBrowsableItem("album/" + id, title, artist, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load albums", e);
@@ -240,7 +240,7 @@ public class LmsBrowseHelper {
                 String title = album.optString("album", "");
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildPlayableItem("album/" + id, title, null, artUri));
+                items.add(buildBrowsableItem("album/" + id, title, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load artist albums", e);
@@ -287,7 +287,7 @@ public class LmsBrowseHelper {
                 JSONObject pl = loop.getJSONObject(i);
                 String id = pl.optString("id", "");
                 String name = pl.optString("playlist", "");
-                items.add(buildPlayableItem("playlist/" + id, name, null, null));
+                items.add(buildBrowsableItem("playlist/" + id, name, null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load playlists", e);
@@ -410,9 +410,16 @@ public class LmsBrowseHelper {
     }
 
     private MediaBrowserCompat.MediaItem buildBrowsableItem(String mediaId, String title, Uri iconUri) {
+        return buildBrowsableItem(mediaId, title, null, iconUri);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItem(String mediaId, String title, String subtitle, Uri iconUri) {
         MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
                 .setMediaId(mediaId)
                 .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
         if (null!=iconUri) {
             desc.setIconUri(iconUri);
         }
