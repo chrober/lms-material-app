@@ -79,7 +79,7 @@ public class LmsBrowseHelper {
         String homeItemsJson = prefs.getString(PREFS_HOME_ITEMS_KEY, null);
         String[] homeItems;
 
-        if (homeItemsJson != null) {
+        if (null!=homeItemsJson) {
             try {
                 JSONArray arr = new JSONArray(homeItemsJson);
                 homeItems = new String[arr.length()];
@@ -95,7 +95,7 @@ public class LmsBrowseHelper {
 
         for (String item : homeItems) {
             MediaBrowserCompat.MediaItem mi = mapHomeItemToMediaItem(item);
-            if (mi != null) {
+            if (null!=mi) {
                 items.add(mi);
             }
             if (items.size() >= 6) break;
@@ -137,11 +137,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "want_url:1"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("loop_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject item = loop.getJSONObject(i);
@@ -167,11 +167,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "tags:s"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("artists_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject artist = loop.getJSONObject(i);
@@ -190,11 +190,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"albums", "0", String.valueOf(BROWSE_LIMIT), sortParam, "tags:ajlsy"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("albums_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject album = loop.getJSONObject(i);
@@ -216,11 +216,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"albums", "0", String.valueOf(BROWSE_LIMIT), "artist_id:" + artistId, "tags:ajlsy"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("albums_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject album = loop.getJSONObject(i);
@@ -241,11 +241,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"titles", "0", String.valueOf(BROWSE_LIMIT), "album_id:" + albumId, "tags:adlN", "sort:tracknum"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("titles_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
@@ -265,11 +265,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"playlists", "0", String.valueOf(BROWSE_LIMIT), "tags:su"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("playlists_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject pl = loop.getJSONObject(i);
@@ -288,11 +288,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"playlists", "tracks", "0", String.valueOf(BROWSE_LIMIT), "playlist_id:" + playlistId, "tags:adlN"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("playlisttracks_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
@@ -312,11 +312,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "type:audio", "want_url:1"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("loop_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject item = loop.getJSONObject(i);
@@ -339,11 +339,11 @@ public class LmsBrowseHelper {
         try {
             JSONObject resp = rpc.sendMessageSync("",
                     new String[]{"players", "0", "10"}, TIMEOUT_MS);
-            if (resp == null) return items;
+            if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
-            if (result == null) return items;
+            if (null==result) return items;
             JSONArray loop = result.optJSONArray("players_loop");
-            if (loop == null) return items;
+            if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject player = loop.getJSONObject(i);
@@ -375,7 +375,7 @@ public class LmsBrowseHelper {
 
     private void sendPlayCommand(String[] command) {
         String playerId = MainActivity.activePlayer;
-        if (playerId != null && !playerId.isEmpty()) {
+        if (null!=playerId && !playerId.isEmpty()) {
             rpc.sendMessage(playerId, command);
         }
     }
@@ -385,9 +385,9 @@ public class LmsBrowseHelper {
     }
 
     private Uri resolveImageUri(String path) {
-        if (path == null || path.isEmpty()) return null;
+        if (null==path || path.isEmpty()) return null;
         String serverUrl = rpc.getServerUrl();
-        if (serverUrl == null) return null;
+        if (null==serverUrl) return null;
         if (path.startsWith("http://") || path.startsWith("https://")) {
             return Uri.parse(path);
         }
@@ -398,7 +398,7 @@ public class LmsBrowseHelper {
         MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
                 .setMediaId(mediaId)
                 .setTitle(title);
-        if (iconUri != null) {
+        if (null!=iconUri) {
             desc.setIconUri(iconUri);
         }
         return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
@@ -408,10 +408,10 @@ public class LmsBrowseHelper {
         MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
                 .setMediaId(mediaId)
                 .setTitle(title);
-        if (subtitle != null) {
+        if (null!=subtitle) {
             desc.setSubtitle(subtitle);
         }
-        if (iconUri != null) {
+        if (null!=iconUri) {
             desc.setIconUri(iconUri);
         }
         return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
