@@ -139,7 +139,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 String[] vals = (String[]) msg.obj;
                 Utils.debug("Set notification player name " + vals[1] + ", id:" + vals[0]);
                 srv.notificationBuilder.setContentTitle(vals[1]);
-                if (FULL_NOTIFICATION.equals(srv.notificationType) && null!=srv.cometClient) {
+                if (null!=srv.cometClient) {
                     srv.cometClient.setPlayer(vals[0]);
                     if (!srv.cometClient.isConnected()) {
                         srv.cometClient.connect();
@@ -150,12 +150,12 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 }
                 srv.updateNotification();
             } else if (msg.what == PLAYER_REFRESH && null!=srv.notificationBuilder && null!=srv.notificationManager) {
-                if (FULL_NOTIFICATION.equals(srv.notificationType) && null!=srv.cometClient && !srv.cometClient.isConnected()) {
+                if (null!=srv.cometClient && !srv.cometClient.isConnected()) {
                     Utils.debug("Connect comet client");
                     srv.cometClient.connect();
                 }
                 srv.createNotification();
-            } else if (msg.what == CHECK_COMET_CONNECTION && null!=srv.cometClient && FULL_NOTIFICATION.equals(srv.notificationType)) {
+            } else if (msg.what == CHECK_COMET_CONNECTION && null!=srv.cometClient) {
                 srv.cometClient.reconnectIfChanged();
             } else {
                 super.handleMessage(msg);
@@ -220,7 +220,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 @Override
                 public void onPlay() {
                     Utils.debug("");
-                    if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && FULL_NOTIFICATION.equals(notificationType)) {
+                    if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer)) {
                         sendCommand(PLAY_COMMAND);
                     } else {
                         mediaSession.setPlaybackState(null);
@@ -258,6 +258,14 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                                 .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1.0f)
                                 .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID)
                                 .build());
+                        if (null!=cometClient && !Utils.isEmpty(MainActivity.activePlayer)) {
+                            cometClient.setPlayer(MainActivity.activePlayer);
+                            if (!cometClient.isConnected()) {
+                                cometClient.connect();
+                            } else {
+                                cometClient.getPlayerStatus(MainActivity.activePlayer);
+                            }
+                        }
                     }
                 }
 
@@ -287,16 +295,14 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
 
     private void networkConnectivityChanged() {
         Utils.debug("");
-        if (FULL_NOTIFICATION.equals(notificationType)) {
-            if (Utils.isNetworkConnected(this)) {
-                cometClient.setPlayer(MainActivity.activePlayer);
-                cometClient.connect();
-            } else {
-                lastStatus = null;
-                cometClient.disconnect();
-            }
-            updateNotification();
+        if (Utils.isNetworkConnected(this)) {
+            cometClient.setPlayer(MainActivity.activePlayer);
+            cometClient.connect();
+        } else {
+            lastStatus = null;
+            cometClient.disconnect();
         }
+        updateNotification();
     }
 
     public synchronized void updatePlayerStatus(PlayerStatus status) {
@@ -348,7 +354,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             rpc = new JsonRpc(getApplicationContext());
         }
         rpc.sendMessage(MainActivity.activePlayer, command);
-        if (FULL_NOTIFICATION.equals(notificationType) && null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
+        if (null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
             cometClient.connect();
         }
     }
@@ -394,21 +400,14 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         }
         String setting = prefs.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, NO_NOTIFICATION);
-        if (!setting.equals(FULL_NOTIFICATION)) {
-            cometClient.disconnect();
-            if (null!=connectionChangeListener) {
-                unregisterReceiver(connectionChangeListener);
-                connectionChangeListener = null;
-            }
-        } else {
-            cometClient.connect();
-            if (null==connectionChangeListener) {
-                connectionChangeListener = new ConnectionChangeListener(this);
-                IntentFilter filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
-                registerReceiver(connectionChangeListener, filter);
-            }
-        }
         notificationType = setting;
+        cometClient.connect();
+        if (null==connectionChangeListener) {
+            connectionChangeListener = new ConnectionChangeListener(this);
+            IntentFilter filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
+            registerReceiver(connectionChangeListener, filter);
+        }
+    }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -466,7 +465,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent,
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_UPDATE_CURRENT);
             boolean statusValid = false;
-            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer) && isFull) {
+            if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer)) {
                 statusValid = true;
             } else {
                 lastStatus = null;
