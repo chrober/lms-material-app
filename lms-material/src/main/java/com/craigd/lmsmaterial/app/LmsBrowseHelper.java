@@ -40,11 +40,32 @@ public class LmsBrowseHelper {
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
     private final String packageName;
+    private Boolean showYear = null;
 
     public LmsBrowseHelper(Context context) {
         rpc = new JsonRpc(context);
         prefs = PreferenceManager.getDefaultSharedPreferences(context);
         packageName = context.getPackageName();
+    }
+
+    private boolean shouldShowYear() {
+        if (null==showYear) {
+            try {
+                JSONObject resp = rpc.sendMessageSync("", new String[]{"pref", "showYear", "?"}, TIMEOUT_MS);
+                if (null!=resp) {
+                    JSONObject result = resp.optJSONObject("result");
+                    if (null!=result) {
+                        showYear = "1".equals(result.optString("_p2", "0"));
+                    }
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to query showYear pref");
+            }
+            if (null==showYear) {
+                showYear = false;
+            }
+        }
+        return showYear;
     }
 
     public List<MediaBrowserCompat.MediaItem> loadChildren(String parentMediaId) {
@@ -215,6 +236,10 @@ public class LmsBrowseHelper {
                 String id = album.optString("id", "");
                 String title = album.optString("album", "");
                 String artist = album.optString("artist", "");
+                int year = album.optInt("year", 0);
+                if (shouldShowYear() && year > 0) {
+                    title = title + " (" + year + ")";
+                }
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
                 items.add(buildBrowsablePlayableItem("album/" + id, title, artist, artUri));
@@ -240,6 +265,10 @@ public class LmsBrowseHelper {
                 JSONObject album = loop.getJSONObject(i);
                 String id = album.optString("id", "");
                 String title = album.optString("album", "");
+                int year = album.optInt("year", 0);
+                if (shouldShowYear() && year > 0) {
+                    title = title + " (" + year + ")";
+                }
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
                 items.add(buildBrowsablePlayableItem("album/" + id, title, null, artUri));
