@@ -126,7 +126,7 @@
             android:resource="@xml/automotive_app_desc" />
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.craigd.lmsmaterial.app.fileprovider"
+            android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
