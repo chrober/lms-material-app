@@ -21,6 +21,8 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.ConnectivityManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -53,7 +55,9 @@ import androidx.preference.PreferenceManager;
 import com.craigd.lmsmaterial.app.cometd.CometClient;
 import com.craigd.lmsmaterial.app.cometd.PlayerStatus;
 
+import java.io.InputStream;
 import java.lang.ref.WeakReference;
+import java.net.URL;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -103,6 +107,8 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     private final Messenger messenger = new Messenger(new IncomingHandler(this));
     private LmsBrowseHelper browseHelper;
     private Executor browseExecutor;
+    private String currentCoverUrl;
+    private Bitmap currentCoverBitmap;
 
     private static class IncomingHandler extends Handler {
         private final WeakReference<LmsMediaService> serviceRef;
@@ -299,7 +305,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_PAUSE;
         int state = lastStatus.isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED;
         mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
-                .setState(state, lastStatus.time * 1000, lastStatus.isPlaying ? 1.0f : 0f)
+                .setState(state, lastStatus.time, lastStatus.isPlaying ? 1.0f : 0f)
                 .setActions(actions)
                 .build());
         MediaMetadataCompat.Builder meta = new MediaMetadataCompat.Builder();
@@ -313,9 +319,32 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             meta.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, lastStatus.album);
         }
         if (lastStatus.duration > 0) {
-            meta.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, lastStatus.duration * 1000);
+            meta.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, lastStatus.duration);
+        }
+        if (null!=currentCoverBitmap) {
+            meta.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentCoverBitmap);
         }
         mediaSession.setMetadata(meta.build());
+
+        String coverUrl = lastStatus.cover;
+        if (null!=coverUrl && !coverUrl.equals(currentCoverUrl)) {
+            currentCoverUrl = coverUrl;
+            getBrowseExecutor().execute(() -> fetchCoverArt(coverUrl));
+        }
+    }
+
+    private void fetchCoverArt(String url) {
+        try {
+            InputStream in = new URL(url).openStream();
+            Bitmap bitmap = BitmapFactory.decodeStream(in);
+            in.close();
+            if (null!=bitmap) {
+                currentCoverBitmap = bitmap;
+                handler.post(this::updateMediaSession);
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to fetch cover art: " + e.getMessage());
+        }
     }
 
     @Override
