@@ -7,9 +7,6 @@
 
 package com.craigd.lmsmaterial.app;
 
-import static com.craigd.lmsmaterial.app.MainActivity.LMS_PASSWORD_KEY;
-import static com.craigd.lmsmaterial.app.MainActivity.LMS_USERNAME_KEY;
-
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Notification;
@@ -23,11 +20,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
-import android.media.AudioManager;
-import android.media.MediaMetadata;
 import android.net.ConnectivityManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -37,9 +30,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.support.v4.media.MediaBrowserCompat;
-import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
-import android.support.v4.media.session.PlaybackStateCompat;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
@@ -53,7 +44,6 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.core.content.ContextCompat;
 import androidx.media.MediaBrowserServiceCompat;
-import androidx.media.VolumeProviderCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
 import androidx.media.session.MediaButtonReceiver;
 import androidx.preference.PreferenceManager;
@@ -61,11 +51,7 @@ import androidx.preference.PreferenceManager;
 import com.craigd.lmsmaterial.app.cometd.CometClient;
 import com.craigd.lmsmaterial.app.cometd.PlayerStatus;
 
-import org.eclipse.jetty.util.B64Code;
-
 import java.lang.ref.WeakReference;
-import java.net.URL;
-import java.net.URLConnection;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -106,16 +92,11 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     private NotificationManagerCompat notificationManager;
     private MediaSessionCompat mediaSession;
     MediaSessionCompat.Callback mediaSessionCallback;
-    private PlaybackStateCompat playbackState;
     private String notificationType = NO_NOTIFICATION;
     private CometClient cometClient = null;
     private SharedPreferences prefs = null;
     private PlayerStatus lastStatus;
-    private String currentCover = null;
-    private Bitmap currentBitmap = null;
-    private Bitmap fallbackBitmap = null;
     private Handler handler;
-    private Executor executor = null;
     private ConnectionChangeListener connectionChangeListener;
     private final Messenger messenger = new Messenger(new IncomingHandler(this));
     private LmsBrowseHelper browseHelper;
@@ -220,13 +201,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 @Override
                 public void onPlay() {
                     Utils.debug("");
-                    if (null!=lastStatus && lastStatus.id.equals(MainActivity.activePlayer)) {
-                        sendCommand(PLAY_COMMAND);
-                    } else {
-                        mediaSession.setPlaybackState(null);
-                        sendCommand(TOGGLE_PLAY_PAUSE_COMMAND);
-                        mediaSession.setPlaybackState(playbackState);
-                    }
+                    sendCommand(PLAY_COMMAND);
                 }
 
                 @Override
@@ -253,20 +228,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 @Override
                 public void onPlayFromMediaId(String mediaId, Bundle extras) {
                     Utils.debug("playFromMediaId: " + mediaId);
-                    if (getBrowseHelper().playMediaId(mediaId)) {
-                        mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
-                                .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1.0f)
-                                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID)
-                                .build());
-                        if (null!=cometClient && !Utils.isEmpty(MainActivity.activePlayer)) {
-                            cometClient.setPlayer(MainActivity.activePlayer);
-                            if (!cometClient.isConnected()) {
-                                cometClient.connect();
-                            } else {
-                                cometClient.getPlayerStatus(MainActivity.activePlayer);
-                            }
-                        }
-                    }
+                    getBrowseHelper().playMediaId(mediaId);
                 }
 
                 @Override
@@ -328,9 +290,7 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         Utils.debug("");
         cometClient = new CometClient(this);
         mediaSession = new MediaSessionCompat(getApplicationContext(), "Lyrion");
-        mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(getMediaSessionCallback());
-        mediaSession.setActive(true);
         setSessionToken(mediaSession.getSessionToken());
         startForegroundService();
     }
@@ -446,13 +406,6 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         return mediaStyle;
     }
 
-    private synchronized Bitmap getFallback() {
-        if (null==fallbackBitmap) {
-            fallbackBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.notification_image);
-        }
-        return fallbackBitmap;
-    }
-
     @SuppressLint("MissingPermission")
     private synchronized Notification updateNotification() {
         Utils.debug("");
@@ -501,61 +454,16 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 notificationBuilder.addAction(new NotificationCompat.Action(R.drawable.ic_action_quit, getString(R.string.quit), getPendingIntent(QUIT_APP)));
                 notificationBuilder.setSubText(statusValid ? lastStatus.display() : getResources().getString(R.string.notification_meta_text));
             } else {
-                PlaybackStateCompat.Builder playbackStateBuilder = new PlaybackStateCompat.Builder();
-                if (statusValid) {
-                    playbackStateBuilder.setState(lastStatus.isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_STOPPED, lastStatus.time, lastStatus.isPlaying ? 1.0f : 0)
-                            .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID);
+                notificationBuilder.clearActions();
+                notificationBuilder.addAction(new NotificationCompat.Action(R.drawable.ic_prev, "Previous", getPendingIntent(PREV_TRACK)));
+                if (statusValid && lastStatus.isPlaying) {
+                    notificationBuilder.addAction(new NotificationCompat.Action(R.drawable.ic_pause, "Pause", getPendingIntent(PAUSE_TRACK)));
                 } else {
-                    playbackStateBuilder.setState(PlaybackStateCompat.STATE_STOPPED, 0, 0)
-                            .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID);
+                    notificationBuilder.addAction(new NotificationCompat.Action(R.drawable.ic_play, "Play", getPendingIntent(PLAY_TRACK)));
                 }
-                playbackStateBuilder.addCustomAction(ACTION_POWER, getString(R.string.power), android.R.drawable.ic_lock_power_off)
-                        .addCustomAction(ACTION_QUIT, getString(R.string.quit), R.drawable.ic_action_quit);
-                playbackState = playbackStateBuilder.build();
-                mediaSession.setPlaybackState(playbackState);
-                mediaSession.setCallback(getMediaSessionCallback());
-
-                if (prefs.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true)) {
-                    mediaSession.setPlaybackToLocal(AudioManager.STREAM_MUSIC);
-                } else {
-                    mediaSession.setPlaybackToRemote(new VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_RELATIVE, 50, 1) {
-                        @Override
-                        public void onAdjustVolume(int direction) {
-                            Utils.debug("" + direction);
-                            if (direction > 0) {
-                                sendCommand(INC_VOLUME_COMMAND);
-                            } else if (direction < 0) {
-                                sendCommand(DEC_VOLUME_COMMAND);
-                            }
-                        }
-                    });
-                }
-
-                String title = null==MainActivity.activePlayerName || MainActivity.activePlayerName.isEmpty() ? getResources().getString(R.string.no_player) : MainActivity.activePlayerName;
-                MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder();
-                metaBuilder.putString(MediaMetadata.METADATA_KEY_ARTIST, title);
-
-                if (statusValid) {
-                    Utils.debug("Full meta data - " + lastStatus.toString());
-                    metaBuilder.putString(MediaMetadata.METADATA_KEY_TITLE, lastStatus.display())
-                            .putLong(MediaMetadata.METADATA_KEY_DURATION, lastStatus.duration);
-                    if (Utils.isEmpty(lastStatus.cover)) {
-                        metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, getFallback());
-                    } else {
-                        if (lastStatus.cover.equals(currentCover)) {
-                            metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentBitmap);
-                        } else {
-                            fetchCover(metaBuilder);
-                        }
-                    }
-                } else {
-                    metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, getFallback())
-                            .putString(MediaMetadata.METADATA_KEY_TITLE, getResources().getString(R.string.notification_meta_text))
-                            .putLong(MediaMetadata.METADATA_KEY_DURATION, 0);
-                }
-                Utils.debug("Set media session title to " + title);
-                mediaSession.setMetadata(metaBuilder.build());
-                mediaSession.setActive(true);
+                notificationBuilder.addAction(new NotificationCompat.Action(R.drawable.ic_next, "Next", getPendingIntent(NEXT_TRACK)));
+                notificationBuilder.addAction(new NotificationCompat.Action(R.drawable.ic_action_quit, getString(R.string.quit), getPendingIntent(QUIT_APP)));
+                notificationBuilder.setSubText(statusValid ? lastStatus.display() : getResources().getString(R.string.notification_meta_text));
             }
 
             Notification notification = notificationBuilder.build();
@@ -572,38 +480,6 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         stopForegroundService();
         new LocalPlayer(prefs, this).autoStop();
         System.exit(0);
-    }
-
-    private void fetchCover(MediaMetadataCompat.Builder metaBuilder) {
-        currentCover = null;
-        Utils.debug(lastStatus.cover);
-        if (null==executor) {
-            executor = Executors.newSingleThreadExecutor();
-        }
-        executor.execute(() -> {
-            try {
-                URL url = new URL(lastStatus.cover);
-                URLConnection con = url.openConnection();
-                String user = prefs.getString(LMS_USERNAME_KEY, "");
-                String pass = prefs.getString(LMS_PASSWORD_KEY, "");
-                if (!user.isEmpty() && !pass.isEmpty()) {
-                    con.setRequestProperty("Authorization", "Basic " + B64Code.encode(user + ":" + pass));
-                }
-
-                currentBitmap = BitmapFactory.decodeStream(con.getInputStream());
-                if (null!=currentBitmap) {
-                    currentCover = lastStatus.cover;
-                }
-                handler.post(() -> {
-                    metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, null==currentBitmap ? getFallback() : currentBitmap);
-                    mediaSession.setMetadata(metaBuilder.build());
-                    mediaSession.setActive(true);
-                    updateNotification();
-                });
-            } catch (Exception e) {
-                Utils.error("Cover error", e);
-            }
-        });
     }
 
     private void createNotification() {
