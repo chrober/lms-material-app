@@ -1,0 +1,19 @@
+{
+  "name": "LMS Material App - Android Build",
+  "image": "mcr.microsoft.com/devcontainers/java:17",
+  "containerEnv": {
+    "ANDROID_HOME": "/opt/android-sdk",
+    "ANDROID_SDK_ROOT": "/opt/android-sdk"
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
+  },
+  "postCreateCommand": "sudo mkdir -p /opt/android-sdk/cmdline-tools && sudo chown -R vscode:vscode /opt/android-sdk && wget -qO /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip && unzip -qo /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools && mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest && rm /tmp/cmdline-tools.zip && yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 && /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager 'platforms;android-34' 'build-tools;34.0.0' 'platform-tools'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack"
+      ]
+    }
+  }
+}
