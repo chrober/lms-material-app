@@ -151,9 +151,6 @@ public class LmsBrowseHelper {
             return loadPlaylists();
         } else if (PLAYERS_ID.equals(parentMediaId)) {
             return loadPlayers();
-        } else if (parentMediaId.startsWith("player/")) {
-            switchPlayer(parentMediaId.substring(7));
-            return loadPlayers();
         } else if (parentMediaId.startsWith("artist/")) {
             return loadArtistAlbums(parentMediaId.substring(7));
         } else if (parentMediaId.startsWith("album/")) {
@@ -476,13 +473,16 @@ public class LmsBrowseHelper {
             JSONArray loop = result.optJSONArray("players_loop");
             if (null==loop) return items;
 
+            String currentPlayer = MainActivity.activePlayer;
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject player = loop.getJSONObject(i);
                 String id = player.optString("playerid", "");
                 String name = player.optString("name", "");
                 boolean isConnected = player.optInt("connected", 0) == 1;
+                boolean isActive = id.equals(currentPlayer);
+                String title = (isActive ? "\u2713 " : "") + name;
                 String subtitle = isConnected ? "Connected" : "Disconnected";
-                items.add(buildBrowsableItem("player/" + id, name + " (" + subtitle + ")", null));
+                items.add(buildPlayableItem("player/" + id, title, subtitle, null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load players", e);
@@ -521,6 +521,10 @@ public class LmsBrowseHelper {
                     String id = album.optString("id", "");
                     String title = album.optString("album", "");
                     String artist = album.optString("artist", "");
+                    int year = album.optInt("year", 0);
+                    if (year > 0) {
+                        title = title + " (" + year + ")";
+                    }
                     String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                     Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
                     items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
@@ -534,7 +538,18 @@ public class LmsBrowseHelper {
                     String id = track.optString("id", "");
                     String title = track.optString("track", "");
                     String artist = track.optString("artist", "");
-                    items.add(buildPlayableItemWithGroup("track/" + id, title, artist, null, songsGroup));
+                    String albumName = track.optString("album", "");
+                    int year = track.optInt("year", 0);
+                    StringBuilder subtitle = new StringBuilder();
+                    if (!artist.isEmpty()) {
+                        subtitle.append(artist);
+                    }
+                    if (!albumName.isEmpty()) {
+                        if (subtitle.length() > 0) subtitle.append(" \u2014 ");
+                        subtitle.append(albumName);
+                        if (year > 0) subtitle.append(" (").append(year).append(")");
+                    }
+                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, null, songsGroup));
                 }
             }
         } catch (Exception e) {
@@ -544,7 +559,10 @@ public class LmsBrowseHelper {
     }
 
     public boolean playMediaId(String mediaId) {
-        if (mediaId.startsWith("album/")) {
+        if (mediaId.startsWith("player/")) {
+            switchPlayer(mediaId.substring(7));
+            return true;
+        } else if (mediaId.startsWith("album/")) {
             sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
             return true;
         } else if (mediaId.startsWith("track/")) {
