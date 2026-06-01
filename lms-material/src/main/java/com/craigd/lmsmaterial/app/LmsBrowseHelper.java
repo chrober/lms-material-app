@@ -21,8 +21,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -51,7 +53,10 @@ public class LmsBrowseHelper {
     private final SharedPreferences prefs;
     private final String packageName;
     private Boolean showYear = null;
+    private Integer groupByReleaseType = null;
     private Map<String, String> labels = null;
+
+    private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
 
     public LmsBrowseHelper(Context context) {
         rpc = new JsonRpc(context);
@@ -77,6 +82,44 @@ public class LmsBrowseHelper {
             }
         }
         return showYear;
+    }
+
+    private boolean shouldGroupByReleaseType() {
+        if (null==groupByReleaseType) {
+            groupByReleaseType = 0;
+            try {
+                JSONObject resp = rpc.sendMessageSync("", new String[]{"pref", "ignoreReleaseTypes", "?"}, TIMEOUT_MS);
+                if (null!=resp) {
+                    JSONObject result = resp.optJSONObject("result");
+                    if (null!=result && "1".equals(result.optString("_p2", "0"))) {
+                        return false;
+                    }
+                }
+                resp = rpc.sendMessageSync("", new String[]{"pref", "groupArtistAlbumsByReleaseType", "?"}, TIMEOUT_MS);
+                if (null!=resp) {
+                    JSONObject result = resp.optJSONObject("result");
+                    if (null!=result) {
+                        groupByReleaseType = Integer.parseInt(result.optString("_p2", "0"));
+                    }
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to query release type prefs");
+            }
+        }
+        return groupByReleaseType > 0;
+    }
+
+    private String releaseTypeHeader(String type) {
+        switch (type) {
+            case "ALBUM": return "Albums";
+            case "EP": return "EPs";
+            case "SINGLE": return "Singles";
+            case "COMPILATION": return "Compilations";
+            case "BOXSET": return "Box Sets";
+            case "BESTOF": return "Best Of";
+            case "APPEARANCE": return "Appearances";
+            default: return type.substring(0, 1).toUpperCase() + type.substring(1).toLowerCase();
+        }
     }
 
     private void ensureLabelsLoaded() {
@@ -346,12 +389,13 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadArtistAlbums(String artistId) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
+            boolean groupReleases = shouldGroupByReleaseType();
             List<String> params = new ArrayList<>();
             params.add("albums");
             params.add("0");
             params.add(String.valueOf(BROWSE_LIMIT));
             params.add("artist_id:" + artistId);
-            params.add("tags:ajlsy");
+            params.add(groupReleases ? "tags:ajlsyW4" : "tags:ajlsy");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
@@ -360,17 +404,58 @@ public class LmsBrowseHelper {
             JSONArray loop = result.optJSONArray("albums_loop");
             if (null==loop) return items;
 
-            for (int i = 0; i < loop.length(); i++) {
-                JSONObject album = loop.getJSONObject(i);
-                String id = album.optString("id", "");
-                String title = album.optString("album", "");
-                int year = album.optInt("year", 0);
-                if (shouldShowYear() && year > 0) {
-                    title = title + " (" + year + ")";
+            if (groupReleases) {
+                Map<String, List<MediaBrowserCompat.MediaItem>> groups = new LinkedHashMap<>();
+                for (String type : RELEASE_TYPE_ORDER) {
+                    groups.put(type, new ArrayList<>());
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildPlayableItem("album/" + id, title, null, artUri));
+
+                for (int i = 0; i < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    int year = album.optInt("year", 0);
+                    if (year > 0) {
+                        title = title + " (" + year + ")";
+                    }
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+
+                    String releaseType = album.optString("release_type", "ALBUM").toUpperCase();
+                    boolean isCompilation = album.optInt("compilation", 0) == 1 && "ALBUM".equals(releaseType);
+                    String group = isCompilation ? "COMPILATION" : releaseType;
+
+                    if (!groups.containsKey(group)) {
+                        groups.put(group, new ArrayList<>());
+                    }
+                    groups.get(group).add(buildPlayableItemWithGroup("album/" + id, title, null, artUri, releaseTypeHeader(group)));
+                }
+
+                for (String type : RELEASE_TYPE_ORDER) {
+                    List<MediaBrowserCompat.MediaItem> groupItems = groups.get(type);
+                    if (null!=groupItems && !groupItems.isEmpty()) {
+                        items.addAll(groupItems);
+                    }
+                }
+                for (Map.Entry<String, List<MediaBrowserCompat.MediaItem>> entry : groups.entrySet()) {
+                    if (Arrays.asList(RELEASE_TYPE_ORDER).contains(entry.getKey())) continue;
+                    if (!entry.getValue().isEmpty()) {
+                        items.addAll(entry.getValue());
+                    }
+                }
+            } else {
+                for (int i = 0; i < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    int year = album.optInt("year", 0);
+                    if (shouldShowYear() && year > 0) {
+                        title = title + " (" + year + ")";
+                    }
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    items.add(buildPlayableItem("album/" + id, title, null, artUri));
+                }
             }
         } catch (Exception e) {
             Utils.error("Failed to load artist albums", e);
