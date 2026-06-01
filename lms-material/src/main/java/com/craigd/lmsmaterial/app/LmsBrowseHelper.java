@@ -395,7 +395,7 @@ public class LmsBrowseHelper {
             params.add("0");
             params.add(String.valueOf(BROWSE_LIMIT));
             params.add("artist_id:" + artistId);
-            params.add(groupReleases ? "tags:ajlsyW4" : "tags:ajlsy");
+            params.add(groupReleases ? "tags:ajlsywW" : "tags:ajlsy");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
