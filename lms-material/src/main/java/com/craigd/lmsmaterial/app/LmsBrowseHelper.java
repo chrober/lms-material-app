@@ -37,6 +37,8 @@ public class LmsBrowseHelper {
     public static final String NEW_ARTISTS_ID = "__NEW_ARTISTS__";
     public static final String ALBUMS_NEW_ID = "__ALBUMS_NEW__";
     public static final String ALBUMS_RANDOM_ID = "__ALBUMS_RANDOM__";
+    public static final String ALBUMS_ALPHA_ID = "__ALBUMS_ALPHA__";
+    public static final String ALBUMS_BY_YEAR_ID = "__ALBUMS_BY_YEAR__";
     public static final String FAVORITES_ID = "__FAVORITES__";
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
@@ -44,10 +46,12 @@ public class LmsBrowseHelper {
 
     private static final int BROWSE_LIMIT = 10000;
     private static final int PAGE_SIZE = 500;
+    private static final int GROUP_PREVIEW_COUNT = 39;
+    private static final int INDEX_FETCH_LIMIT = 25000;
     private static final int SEARCH_LIMIT = 50;
     private static final int TIMEOUT_MS = 15000;
 
-    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY,MORE";
+    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY,MORE,YEAR";
 
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
@@ -55,8 +59,24 @@ public class LmsBrowseHelper {
     private Boolean showYear = null;
     private Integer groupByReleaseType = null;
     private Map<String, String> labels = null;
+    private List<GroupIndex> albumArtistIndex = null;
+    private List<GroupIndex> allArtistIndex = null;
+    private List<GroupIndex> albumsAlphaIndex = null;
+    private List<GroupIndex> albumsByYearIndex = null;
 
     private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
+
+    private static class GroupIndex {
+        final String key;
+        final int offset;
+        final int count;
+
+        GroupIndex(String key, int offset, int count) {
+            this.key = key;
+            this.offset = offset;
+            this.count = count;
+        }
+    }
 
     public LmsBrowseHelper(Context context) {
         rpc = new JsonRpc(context);
@@ -141,6 +161,7 @@ public class LmsBrowseHelper {
         labels.put("LIBRARY", "Libraries");
         labels.put("ALL_TRACKS", "All");
         labels.put("MORE", "More");
+        labels.put("YEAR", "Year");
         try {
             JSONObject resp = rpc.sendMessageSync("", new String[]{"getstring", LABEL_TOKENS}, TIMEOUT_MS);
             if (null!=resp) {
@@ -199,12 +220,24 @@ public class LmsBrowseHelper {
             return loadArtistsGroup();
         } else if (RELEASES_GROUP_ID.equals(parentMediaId)) {
             return loadReleasesGroup();
-        } else if (ALBUM_ARTISTS_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUM_ARTISTS_ID + "/")) {
-            return loadAlbumArtists(parseOffset(parentMediaId, ALBUM_ARTISTS_ID));
-        } else if (ALL_ARTISTS_ID.equals(parentMediaId) || parentMediaId.startsWith(ALL_ARTISTS_ID + "/")) {
-            return loadAllArtists(parseOffset(parentMediaId, ALL_ARTISTS_ID));
+        } else if (ALBUM_ARTISTS_ID.equals(parentMediaId)) {
+            return loadArtistsGrouped(ALBUM_ARTISTS_ID, true);
+        } else if (parentMediaId.startsWith(ALBUM_ARTISTS_ID + ":")) {
+            return loadArtistGroupPage(parentMediaId, ALBUM_ARTISTS_ID, true);
+        } else if (ALL_ARTISTS_ID.equals(parentMediaId)) {
+            return loadArtistsGrouped(ALL_ARTISTS_ID, false);
+        } else if (parentMediaId.startsWith(ALL_ARTISTS_ID + ":")) {
+            return loadArtistGroupPage(parentMediaId, ALL_ARTISTS_ID, false);
         } else if (NEW_ARTISTS_ID.equals(parentMediaId) || parentMediaId.startsWith(NEW_ARTISTS_ID + "/")) {
             return loadNewArtists(parseOffset(parentMediaId, NEW_ARTISTS_ID));
+        } else if (ALBUMS_ALPHA_ID.equals(parentMediaId)) {
+            return loadAlbumsAlphaGrouped();
+        } else if (parentMediaId.startsWith(ALBUMS_ALPHA_ID + ":")) {
+            return loadAlbumsAlphaPage(parentMediaId);
+        } else if (ALBUMS_BY_YEAR_ID.equals(parentMediaId)) {
+            return loadAlbumsByYearGrouped();
+        } else if (parentMediaId.startsWith(ALBUMS_BY_YEAR_ID + ":")) {
+            return loadAlbumsByYearPage(parentMediaId);
         } else if (ALBUMS_NEW_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_NEW_ID + "/")) {
             return loadAlbums("sort:new", parseOffset(parentMediaId, ALBUMS_NEW_ID));
         } else if (ALBUMS_RANDOM_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_RANDOM_ID + "/")) {
@@ -270,19 +303,21 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
+        items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
         items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadAlbumArtists(int offset) {
+    private List<MediaBrowserCompat.MediaItem> loadArtistsGrouped(String baseId, boolean albumArtistsOnly) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             List<String> params = new ArrayList<>();
             params.add("artists");
-            params.add(String.valueOf(offset));
-            params.add(String.valueOf(PAGE_SIZE));
-            params.add("role_id:5");
+            params.add("0");
+            params.add(String.valueOf(INDEX_FETCH_LIMIT));
+            if (albumArtistsOnly) params.add("role_id:5");
             params.add("tags:s");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
@@ -292,33 +327,151 @@ public class LmsBrowseHelper {
             JSONArray loop = result.optJSONArray("artists_loop");
             if (null==loop) return items;
 
-            for (int i = 0; i < loop.length(); i++) {
-                JSONObject artist = loop.getJSONObject(i);
-                String id = artist.optString("id", "");
-                String name = artist.optString("artist", "");
-                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
-                items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
+            List<GroupIndex> index = albumArtistsOnly ? albumArtistIndex : allArtistIndex;
+            if (null==index) {
+                index = buildLetterIndexFromLoop(loop);
+                if (albumArtistsOnly) {
+                    albumArtistIndex = index;
+                } else {
+                    allArtistIndex = index;
+                }
             }
 
-            int total = result.optInt("count", 0);
-            int nextOffset = offset + PAGE_SIZE;
-            if (nextOffset < total) {
-                items.add(buildBrowsableItem(ALBUM_ARTISTS_ID + "/" + nextOffset,
-                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+            for (GroupIndex group : index) {
+                String showAllSubtitle = "Show all " + group.count + " artists";
+                items.add(buildBrowsableItemWithGroup(baseId + ":" + group.key, group.key, showAllSubtitle, null, group.key));
+
+                int previewCount = Math.min(GROUP_PREVIEW_COUNT, group.count);
+                for (int i = 0; i < previewCount && (group.offset + i) < loop.length(); i++) {
+                    JSONObject artist = loop.getJSONObject(group.offset + i);
+                    String id = artist.optString("id", "");
+                    String name = artist.optString("artist", "");
+                    Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, group.key));
+                }
             }
         } catch (Exception e) {
-            Utils.error("Failed to load album artists", e);
+            Utils.error("Failed to load grouped artists", e);
         }
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadAllArtists(int offset) {
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsAlphaGrouped() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add("0");
+            params.add(String.valueOf(INDEX_FETCH_LIMIT));
+            params.add("sort:album");
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            if (null==albumsAlphaIndex) {
+                albumsAlphaIndex = buildLetterIndexFromLoop(loop);
+            }
+
+            for (GroupIndex group : albumsAlphaIndex) {
+                String showAllSubtitle = "Show all " + group.count + " albums";
+                items.add(buildBrowsableItemWithGroup(ALBUMS_ALPHA_ID + ":" + group.key, group.key, showAllSubtitle, null, group.key));
+
+                int previewCount = Math.min(GROUP_PREVIEW_COUNT, group.count);
+                for (int i = 0; i < previewCount && (group.offset + i) < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(group.offset + i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    String artist = album.optString("artist", "");
+                    int year = album.optInt("year", 0);
+                    if (shouldShowYear() && year > 0) {
+                        title = title + " (" + year + ")";
+                    }
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, group.key));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums alphabetically grouped", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsByYearGrouped() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add("0");
+            params.add(String.valueOf(INDEX_FETCH_LIMIT));
+            params.add("sort:yearalbum");
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            if (null==albumsByYearIndex) {
+                albumsByYearIndex = buildYearIndexFromLoop(loop);
+            }
+
+            for (GroupIndex group : albumsByYearIndex) {
+                String showAllSubtitle = "Show all " + group.count + " albums";
+                items.add(buildBrowsableItemWithGroup(ALBUMS_BY_YEAR_ID + ":" + group.key, group.key, showAllSubtitle, null, group.key));
+
+                int previewCount = Math.min(GROUP_PREVIEW_COUNT, group.count);
+                for (int i = 0; i < previewCount && (group.offset + i) < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(group.offset + i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    String artist = album.optString("artist", "");
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, group.key));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums by year grouped", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadArtistGroupPage(String mediaId, String baseId, boolean albumArtistsOnly) {
+        String suffix = mediaId.substring(baseId.length() + 1);
+        int slashPos = suffix.indexOf('/');
+        String letter = slashPos < 0 ? suffix : suffix.substring(0, slashPos);
+        int pageOffset = 0;
+        if (slashPos >= 0) {
+            try {
+                pageOffset = Integer.parseInt(suffix.substring(slashPos + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse page offset from: " + mediaId);
+            }
+        }
+
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        List<GroupIndex> index = albumArtistsOnly ? albumArtistIndex : allArtistIndex;
+        GroupIndex group = findGroup(index, letter);
+        if (null==group) return items;
+
+        int absoluteOffset = group.offset + pageOffset;
+        int remaining = group.count - pageOffset;
+        int fetchCount = Math.min(PAGE_SIZE, remaining);
+
+        try {
+            List<String> params = new ArrayList<>();
             params.add("artists");
-            params.add(String.valueOf(offset));
-            params.add(String.valueOf(PAGE_SIZE));
+            params.add(String.valueOf(absoluteOffset));
+            params.add(String.valueOf(fetchCount));
+            if (albumArtistsOnly) params.add("role_id:5");
             params.add("tags:s");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
@@ -336,14 +489,131 @@ public class LmsBrowseHelper {
                 items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
             }
 
-            int total = result.optInt("count", 0);
-            int nextOffset = offset + PAGE_SIZE;
-            if (nextOffset < total) {
-                items.add(buildBrowsableItem(ALL_ARTISTS_ID + "/" + nextOffset,
-                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+            int nextPageOffset = pageOffset + PAGE_SIZE;
+            if (nextPageOffset < group.count) {
+                items.add(buildBrowsableItem(baseId + ":" + letter + "/" + nextPageOffset,
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + group.count + ")", null));
             }
         } catch (Exception e) {
-            Utils.error("Failed to load artists", e);
+            Utils.error("Failed to load artist group page", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsAlphaPage(String mediaId) {
+        String suffix = mediaId.substring(ALBUMS_ALPHA_ID.length() + 1);
+        int slashPos = suffix.indexOf('/');
+        String letter = slashPos < 0 ? suffix : suffix.substring(0, slashPos);
+        int pageOffset = 0;
+        if (slashPos >= 0) {
+            try {
+                pageOffset = Integer.parseInt(suffix.substring(slashPos + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse page offset from: " + mediaId);
+            }
+        }
+
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        GroupIndex group = findGroup(albumsAlphaIndex, letter);
+        if (null==group) return items;
+
+        int absoluteOffset = group.offset + pageOffset;
+        int remaining = group.count - pageOffset;
+        int fetchCount = Math.min(PAGE_SIZE, remaining);
+
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add(String.valueOf(absoluteOffset));
+            params.add(String.valueOf(fetchCount));
+            params.add("sort:album");
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                String id = album.optString("id", "");
+                String title = album.optString("album", "");
+                String artist = album.optString("artist", "");
+                int year = album.optInt("year", 0);
+                if (shouldShowYear() && year > 0) {
+                    title = title + " (" + year + ")";
+                }
+                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+            }
+
+            int nextPageOffset = pageOffset + PAGE_SIZE;
+            if (nextPageOffset < group.count) {
+                items.add(buildBrowsableItem(ALBUMS_ALPHA_ID + ":" + letter + "/" + nextPageOffset,
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + group.count + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums alpha page", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsByYearPage(String mediaId) {
+        String suffix = mediaId.substring(ALBUMS_BY_YEAR_ID.length() + 1);
+        int slashPos = suffix.indexOf('/');
+        String yearKey = slashPos < 0 ? suffix : suffix.substring(0, slashPos);
+        int pageOffset = 0;
+        if (slashPos >= 0) {
+            try {
+                pageOffset = Integer.parseInt(suffix.substring(slashPos + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse page offset from: " + mediaId);
+            }
+        }
+
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        GroupIndex group = findGroup(albumsByYearIndex, yearKey);
+        if (null==group) return items;
+
+        int absoluteOffset = group.offset + pageOffset;
+        int remaining = group.count - pageOffset;
+        int fetchCount = Math.min(PAGE_SIZE, remaining);
+
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add(String.valueOf(absoluteOffset));
+            params.add(String.valueOf(fetchCount));
+            params.add("sort:yearalbum");
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                String id = album.optString("id", "");
+                String title = album.optString("album", "");
+                String artist = album.optString("artist", "");
+                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+            }
+
+            int nextPageOffset = pageOffset + PAGE_SIZE;
+            if (nextPageOffset < group.count) {
+                items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + yearKey + "/" + nextPageOffset,
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + group.count + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums by year page", e);
         }
         return items;
     }
@@ -898,6 +1168,84 @@ public class LmsBrowseHelper {
             MainActivity.activeLibrary = libraryId;
             prefs.edit().putString("active_library", libraryId).apply();
         }
+        albumArtistIndex = null;
+        allArtistIndex = null;
+        albumsAlphaIndex = null;
+        albumsByYearIndex = null;
+    }
+
+    private String normalizeTextkey(String textkey) {
+        if (null==textkey || textkey.isEmpty()) return "#";
+        char c = Character.toUpperCase(textkey.charAt(0));
+        if (c >= '0' && c <= '9') return "123";
+        if (c >= 'A' && c <= 'Z') return String.valueOf(c);
+        return "#";
+    }
+
+    private List<GroupIndex> buildLetterIndexFromLoop(JSONArray loop) {
+        List<GroupIndex> index = new ArrayList<>();
+        try {
+            LinkedHashMap<String, int[]> groups = new LinkedHashMap<>();
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject item = loop.getJSONObject(i);
+                String textkey = item.optString("textkey", "");
+                String key = normalizeTextkey(textkey);
+                if (!groups.containsKey(key)) {
+                    groups.put(key, new int[]{i, 0});
+                }
+                groups.get(key)[1]++;
+            }
+
+            if (groups.containsKey("123")) {
+                int[] v = groups.get("123");
+                index.add(new GroupIndex("123", v[0], v[1]));
+            }
+            for (char c = 'A'; c <= 'Z'; c++) {
+                String key = String.valueOf(c);
+                if (groups.containsKey(key)) {
+                    int[] v = groups.get(key);
+                    index.add(new GroupIndex(key, v[0], v[1]));
+                }
+            }
+            if (groups.containsKey("#")) {
+                int[] v = groups.get("#");
+                index.add(new GroupIndex("#", v[0], v[1]));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to build letter index", e);
+        }
+        return index;
+    }
+
+    private List<GroupIndex> buildYearIndexFromLoop(JSONArray loop) {
+        List<GroupIndex> index = new ArrayList<>();
+        try {
+            LinkedHashMap<String, int[]> groups = new LinkedHashMap<>();
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                int year = album.optInt("year", 0);
+                String key = year > 0 ? String.valueOf(year) : "Unknown";
+                if (!groups.containsKey(key)) {
+                    groups.put(key, new int[]{i, 0});
+                }
+                groups.get(key)[1]++;
+            }
+
+            for (Map.Entry<String, int[]> entry : groups.entrySet()) {
+                index.add(new GroupIndex(entry.getKey(), entry.getValue()[0], entry.getValue()[1]));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to build year index", e);
+        }
+        return index;
+    }
+
+    private GroupIndex findGroup(List<GroupIndex> index, String key) {
+        if (null==index) return null;
+        for (GroupIndex g : index) {
+            if (g.key.equals(key)) return g;
+        }
+        return null;
     }
 
     private Uri drawableUri(int resId) {
@@ -958,9 +1306,16 @@ public class LmsBrowseHelper {
     }
 
     private MediaBrowserCompat.MediaItem buildBrowsableItemWithGroup(String mediaId, String title, Uri iconUri, String groupTitle) {
+        return buildBrowsableItemWithGroup(mediaId, title, null, iconUri, groupTitle);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItemWithGroup(String mediaId, String title, String subtitle, Uri iconUri, String groupTitle) {
         MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
                 .setMediaId(mediaId)
                 .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
         if (null!=iconUri) {
             desc.setIconUri(iconUri);
         }
