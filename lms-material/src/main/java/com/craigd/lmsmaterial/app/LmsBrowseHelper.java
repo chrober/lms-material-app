@@ -510,7 +510,8 @@ public class LmsBrowseHelper {
                     JSONObject artist = artists.getJSONObject(i);
                     String id = artist.optString("id", "");
                     String name = artist.optString("contributor", "");
-                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, null, artistsGroup));
+                    Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, artistsGroup));
                 }
             }
 
@@ -540,6 +541,8 @@ public class LmsBrowseHelper {
                     String artist = track.optString("artist", "");
                     String albumName = track.optString("album", "");
                     int year = track.optInt("year", 0);
+                    String coverId = track.optString("coverid", track.optString("artwork_track_id", ""));
+                    Uri artUri = !coverId.isEmpty() ? resolveImageUri("/music/" + coverId + "/cover") : null;
                     StringBuilder subtitle = new StringBuilder();
                     if (!artist.isEmpty()) {
                         subtitle.append(artist);
@@ -549,7 +552,7 @@ public class LmsBrowseHelper {
                         subtitle.append(albumName);
                         if (year > 0) subtitle.append(" (").append(year).append(")");
                     }
-                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, null, songsGroup));
+                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, artUri, songsGroup));
                 }
             }
         } catch (Exception e) {
