@@ -128,6 +128,7 @@ public class MainActivity extends AppCompatActivity {
 
     public static String activePlayer = null;
     public static String activePlayerName = null;
+    public static String activeLibrary = null;
     private static boolean isCurrentActivity = false;
 
     private Thread shareCleanThread = null;
@@ -428,6 +429,8 @@ public class MainActivity extends AppCompatActivity {
         }
         activePlayer = sharedPreferences.getString(CURRENT_PLAYER_ID_KEY, activePlayer);
         Utils.debug("Startup player set to:"+activePlayer);
+        activeLibrary = sharedPreferences.getString("active_library", null);
+        Utils.debug("Startup library set to:"+activeLibrary);
     }
 
     private Boolean clearCache() {
@@ -811,6 +814,19 @@ public class MainActivity extends AppCompatActivity {
         editor.apply();
     }
 
+    @JavascriptInterface
+    public void updateLibrary(String libraryId) {
+        Utils.debug("updateLibrary: " + libraryId);
+        activeLibrary = (null!=libraryId && !libraryId.isEmpty() && !"-1".equals(libraryId)) ? libraryId : null;
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        if (null!=activeLibrary) {
+            editor.putString("active_library", activeLibrary);
+        } else {
+            editor.remove("active_library");
+        }
+        editor.apply();
+    }
+
     public static Set<String> getLocalIpAddresses() {
         Set<String> addresses = new TreeSet<>();
         try {
@@ -907,7 +923,7 @@ public class MainActivity extends AppCompatActivity {
                 refreshLmsMediaService();
             }
             runOnUiThread(() -> webView.evaluateJavascript(
-                    "try { NativeReceiver.updateAutoHomeItems(localStorage.getItem('detailedHomeItems') || '[]'); } catch(e) {}",
+                    "try { NativeReceiver.updateAutoHomeItems(localStorage.getItem('detailedHomeItems') || '[]'); NativeReceiver.updateLibrary(localStorage.getItem('lms-material::library') || '-1'); } catch(e) {}",
                     null));
         } else {
             startDisconnectTimer();

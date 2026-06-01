@@ -126,6 +126,17 @@ public class LmsBrowseHelper {
         return null!=val ? val : key;
     }
 
+    private String getLibraryId() {
+        return MainActivity.activeLibrary;
+    }
+
+    private void addLibraryParam(List<String> params) {
+        String lib = getLibraryId();
+        if (null!=lib) {
+            params.add("library_id:" + lib);
+        }
+    }
+
     public List<MediaBrowserCompat.MediaItem> loadChildren(String parentMediaId) {
         if (ROOT_ID.equals(parentMediaId)) {
             return loadRoot();
@@ -195,8 +206,14 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadAlbumArtists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "role_id:5", "tags:s"}, TIMEOUT_MS);
+            List<String> params = new ArrayList<>();
+            params.add("artists");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("role_id:5");
+            params.add("tags:s");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -218,8 +235,13 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadAllArtists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "tags:s"}, TIMEOUT_MS);
+            List<String> params = new ArrayList<>();
+            params.add("artists");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("tags:s");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -241,8 +263,14 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadNewArtists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "sort:new", "tags:s"}, TIMEOUT_MS);
+            List<String> params = new ArrayList<>();
+            params.add("artists");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("sort:new");
+            params.add("tags:s");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -272,6 +300,7 @@ public class LmsBrowseHelper {
                 params.add(sortParam);
             }
             params.add("tags:ajlsy");
+            addLibraryParam(params);
 
             JSONObject resp = rpc.sendMessageSync("",
                     params.toArray(new String[0]), TIMEOUT_MS);
@@ -303,8 +332,14 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadArtistAlbums(String artistId) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"albums", "0", String.valueOf(BROWSE_LIMIT), "artist_id:" + artistId, "tags:ajlsy"}, TIMEOUT_MS);
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("artist_id:" + artistId);
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -332,8 +367,15 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadAlbumTracks(String albumId) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"titles", "0", String.valueOf(BROWSE_LIMIT), "album_id:" + albumId, "tags:adlN", "sort:tracknum"}, TIMEOUT_MS);
+            List<String> params = new ArrayList<>();
+            params.add("titles");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("album_id:" + albumId);
+            params.add("tags:adlN");
+            params.add("sort:tracknum");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -494,8 +536,13 @@ public class LmsBrowseHelper {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"search", "0", String.valueOf(BROWSE_LIMIT), "term:" + query}, TIMEOUT_MS);
+            List<String> params = new ArrayList<>();
+            params.add("search");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("term:" + query);
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -510,7 +557,8 @@ public class LmsBrowseHelper {
                     JSONObject artist = artists.getJSONObject(i);
                     String id = artist.optString("id", "");
                     String name = artist.optString("contributor", "");
-                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, null, artistsGroup));
+                    Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, artistsGroup));
                 }
             }
 
@@ -540,6 +588,8 @@ public class LmsBrowseHelper {
                     String artist = track.optString("artist", "");
                     String albumName = track.optString("album", "");
                     int year = track.optInt("year", 0);
+                    String coverId = track.optString("coverid", track.optString("artwork_track_id", ""));
+                    Uri artUri = !coverId.isEmpty() ? resolveImageUri("/music/" + coverId + "/cover") : null;
                     StringBuilder subtitle = new StringBuilder();
                     if (!artist.isEmpty()) {
                         subtitle.append(artist);
@@ -549,7 +599,7 @@ public class LmsBrowseHelper {
                         subtitle.append(albumName);
                         if (year > 0) subtitle.append(" (").append(year).append(")");
                     }
-                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, null, songsGroup));
+                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, artUri, songsGroup));
                 }
             }
         } catch (Exception e) {
