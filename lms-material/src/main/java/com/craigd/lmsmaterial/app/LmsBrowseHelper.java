@@ -10,9 +10,11 @@ package com.craigd.lmsmaterial.app;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.os.Bundle;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaDescriptionCompat;
 
+import androidx.media.utils.MediaConstants;
 import androidx.preference.PreferenceManager;
 
 import org.json.JSONArray;
@@ -41,7 +43,7 @@ public class LmsBrowseHelper {
     private static final int BROWSE_LIMIT = 100;
     private static final int TIMEOUT_MS = 10000;
 
-    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX";
+    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS";
 
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
@@ -88,6 +90,9 @@ public class LmsBrowseHelper {
         labels.put("PLAYERS", "Players");
         labels.put("NEW_ARTISTS", "New Artists");
         labels.put("RANDOM_ALBUMS", "Random Albums");
+        labels.put("ARTISTS", "Artists");
+        labels.put("ALBUMS", "Albums");
+        labels.put("SONGS", "Songs");
         try {
             JSONObject resp = rpc.sendMessageSync("", new String[]{"getstring", LABEL_TOKENS}, TIMEOUT_MS);
             if (null!=resp) {
@@ -486,6 +491,7 @@ public class LmsBrowseHelper {
     }
 
     public List<MediaBrowserCompat.MediaItem> search(String query) {
+        ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
@@ -494,13 +500,17 @@ public class LmsBrowseHelper {
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
 
+            String artistsGroup = getLabel("ARTISTS");
+            String albumsGroup = getLabel("ALBUMS");
+            String songsGroup = getLabel("SONGS");
+
             JSONArray artists = result.optJSONArray("contributors_loop");
             if (null!=artists) {
                 for (int i = 0; i < artists.length(); i++) {
                     JSONObject artist = artists.getJSONObject(i);
                     String id = artist.optString("id", "");
                     String name = artist.optString("contributor", "");
-                    items.add(buildBrowsableItem("artist/" + id, name, null));
+                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, null, artistsGroup));
                 }
             }
 
@@ -513,7 +523,7 @@ public class LmsBrowseHelper {
                     String artist = album.optString("artist", "");
                     String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                     Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                    items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
                 }
             }
 
@@ -524,7 +534,7 @@ public class LmsBrowseHelper {
                     String id = track.optString("id", "");
                     String title = track.optString("track", "");
                     String artist = track.optString("artist", "");
-                    items.add(buildPlayableItem("track/" + id, title, artist, null));
+                    items.add(buildPlayableItemWithGroup("track/" + id, title, artist, null, songsGroup));
                 }
             }
         } catch (Exception e) {
@@ -615,6 +625,35 @@ public class LmsBrowseHelper {
         if (null!=iconUri) {
             desc.setIconUri(iconUri);
         }
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItemWithGroup(String mediaId, String title, Uri iconUri, String groupTitle) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        Bundle extras = new Bundle();
+        extras.putString(MediaConstants.DESCRIPTION_EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, groupTitle);
+        desc.setExtras(extras);
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildPlayableItemWithGroup(String mediaId, String title, String subtitle, Uri iconUri, String groupTitle) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        Bundle extras = new Bundle();
+        extras.putString(MediaConstants.DESCRIPTION_EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, groupTitle);
+        desc.setExtras(extras);
         return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
     }
 }
