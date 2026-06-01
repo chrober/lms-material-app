@@ -218,15 +218,15 @@ public class LmsBrowseHelper {
             return loadArtistsGroup();
         } else if (RELEASES_GROUP_ID.equals(parentMediaId)) {
             return loadReleasesGroup();
-        } else if (parentMediaId.equals(ALBUM_ARTISTS_ID) || parentMediaId.startsWith(ALBUM_ARTISTS_ID + "/")) {
+        } else if (ALBUM_ARTISTS_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUM_ARTISTS_ID + "/")) {
             return loadAlbumArtists(parseOffset(parentMediaId, ALBUM_ARTISTS_ID));
-        } else if (parentMediaId.equals(ALL_ARTISTS_ID) || parentMediaId.startsWith(ALL_ARTISTS_ID + "/")) {
+        } else if (ALL_ARTISTS_ID.equals(parentMediaId) || parentMediaId.startsWith(ALL_ARTISTS_ID + "/")) {
             return loadAllArtists(parseOffset(parentMediaId, ALL_ARTISTS_ID));
-        } else if (parentMediaId.equals(NEW_ARTISTS_ID)) {
+        } else if (NEW_ARTISTS_ID.equals(parentMediaId)) {
             return loadNewArtists();
-        } else if (parentMediaId.equals(ALBUMS_NEW_ID)) {
+        } else if (ALBUMS_NEW_ID.equals(parentMediaId)) {
             return loadAlbums("sort:new", 0);
-        } else if (parentMediaId.equals(ALBUMS_RANDOM_ID) || parentMediaId.startsWith(ALBUMS_RANDOM_ID + "/")) {
+        } else if (ALBUMS_RANDOM_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_RANDOM_ID + "/")) {
             return loadAlbums("sort:random", parseOffset(parentMediaId, ALBUMS_RANDOM_ID));
         } else if (FAVORITES_ID.equals(parentMediaId)) {
             return loadFavorites();
@@ -253,7 +253,7 @@ public class LmsBrowseHelper {
             try {
                 return Integer.parseInt(mediaId.substring(prefix.length() + 1));
             } catch (NumberFormatException e) {
-                // ignore
+                Utils.debug("Failed to parse offset from: " + mediaId);
             }
         }
         return 0;
