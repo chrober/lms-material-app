@@ -157,7 +157,7 @@ public class LmsBrowseHelper {
         labels.put("ARTISTS", "Artists");
         labels.put("ALBUMS", "Albums");
         labels.put("SONGS", "Songs");
-        labels.put("LIBRARY", "Library");
+        labels.put("LIBRARY", "Libraries");
         labels.put("ALL_TRACKS", "All");
         labels.put("MORE", "More");
         try {
@@ -309,7 +309,8 @@ public class LmsBrowseHelper {
                 JSONObject artist = loop.getJSONObject(i);
                 String id = artist.optString("id", "");
                 String name = artist.optString("artist", "");
-                items.add(buildBrowsableItem("artist/" + id, name, null));
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
             }
 
             int total = result.optInt("count", 0);
@@ -344,7 +345,8 @@ public class LmsBrowseHelper {
                 JSONObject artist = loop.getJSONObject(i);
                 String id = artist.optString("id", "");
                 String name = artist.optString("artist", "");
-                items.add(buildBrowsableItem("artist/" + id, name, null));
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
             }
 
             int total = result.optInt("count", 0);
@@ -380,7 +382,8 @@ public class LmsBrowseHelper {
                 JSONObject artist = loop.getJSONObject(i);
                 String id = artist.optString("id", "");
                 String name = artist.optString("artist", "");
-                items.add(buildBrowsableItem("artist/" + id, name, null));
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load new artists", e);
@@ -999,4 +1002,5 @@ public class LmsBrowseHelper {
         desc.setExtras(extras);
         return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
     }
+
 }
