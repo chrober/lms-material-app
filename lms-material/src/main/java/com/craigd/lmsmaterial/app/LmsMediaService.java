@@ -258,6 +258,15 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 @Override
                 public void onPlayFromMediaId(String mediaId, Bundle extras) {
                     Utils.debug("playFromMediaId: " + mediaId);
+                    if (mediaId.startsWith("player/")) {
+                        getBrowseHelper().playMediaId(mediaId);
+                        notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+                        return;
+                    } else if (mediaId.startsWith("library/")) {
+                        getBrowseHelper().playMediaId(mediaId);
+                        notifyChildrenChanged(LmsBrowseHelper.LIBRARIES_ID);
+                        return;
+                    }
                     mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
                             .setState(PlaybackStateCompat.STATE_BUFFERING, 0, 0f)
                             .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE
