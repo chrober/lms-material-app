@@ -35,7 +35,6 @@ public class LmsBrowseHelper {
     public static final String ALBUM_ARTISTS_ID = "__ALBUM_ARTISTS__";
     public static final String ALL_ARTISTS_ID = "__ALL_ARTISTS__";
     public static final String NEW_ARTISTS_ID = "__NEW_ARTISTS__";
-    public static final String ALL_RELEASES_ID = "__ALL_RELEASES__";
     public static final String ALBUMS_NEW_ID = "__ALBUMS_NEW__";
     public static final String ALBUMS_RANDOM_ID = "__ALBUMS_RANDOM__";
     public static final String FAVORITES_ID = "__FAVORITES__";
@@ -44,16 +43,18 @@ public class LmsBrowseHelper {
     public static final String LIBRARIES_ID = "__LIBRARIES__";
 
     private static final int BROWSE_LIMIT = 10000;
+    private static final int PAGE_SIZE = 500;
     private static final int SEARCH_LIMIT = 50;
     private static final int TIMEOUT_MS = 15000;
 
-    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY";
+    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY,MORE";
 
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
     private final String packageName;
     private Boolean showYear = null;
     private Integer groupByReleaseType = null;
+    private Integer browseAgeLimit = null;
     private Map<String, String> labels = null;
 
     private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
@@ -109,6 +110,24 @@ public class LmsBrowseHelper {
         return groupByReleaseType > 0;
     }
 
+    private int getBrowseAgeLimit() {
+        if (null==browseAgeLimit) {
+            browseAgeLimit = 100;
+            try {
+                JSONObject resp = rpc.sendMessageSync("", new String[]{"pref", "browseagelimit", "?"}, TIMEOUT_MS);
+                if (null!=resp) {
+                    JSONObject result = resp.optJSONObject("result");
+                    if (null!=result) {
+                        browseAgeLimit = Integer.parseInt(result.optString("_p2", "100"));
+                    }
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to query browseagelimit pref");
+            }
+        }
+        return browseAgeLimit;
+    }
+
     private String releaseTypeHeader(String type) {
         switch (type) {
             case "ALBUM": return "Albums";
@@ -140,6 +159,7 @@ public class LmsBrowseHelper {
         labels.put("SONGS", "Songs");
         labels.put("LIBRARY", "Library");
         labels.put("ALL_TRACKS", "All");
+        labels.put("MORE", "More");
         try {
             JSONObject resp = rpc.sendMessageSync("", new String[]{"getstring", LABEL_TOKENS}, TIMEOUT_MS);
             if (null!=resp) {
@@ -198,18 +218,16 @@ public class LmsBrowseHelper {
             return loadArtistsGroup();
         } else if (RELEASES_GROUP_ID.equals(parentMediaId)) {
             return loadReleasesGroup();
-        } else if (ALBUM_ARTISTS_ID.equals(parentMediaId)) {
-            return loadAlbumArtists();
-        } else if (ALL_ARTISTS_ID.equals(parentMediaId)) {
-            return loadAllArtists();
-        } else if (NEW_ARTISTS_ID.equals(parentMediaId)) {
+        } else if (parentMediaId.equals(ALBUM_ARTISTS_ID) || parentMediaId.startsWith(ALBUM_ARTISTS_ID + "/")) {
+            return loadAlbumArtists(parseOffset(parentMediaId, ALBUM_ARTISTS_ID));
+        } else if (parentMediaId.equals(ALL_ARTISTS_ID) || parentMediaId.startsWith(ALL_ARTISTS_ID + "/")) {
+            return loadAllArtists(parseOffset(parentMediaId, ALL_ARTISTS_ID));
+        } else if (parentMediaId.equals(NEW_ARTISTS_ID)) {
             return loadNewArtists();
-        } else if (ALL_RELEASES_ID.equals(parentMediaId)) {
-            return loadAlbums(null);
-        } else if (ALBUMS_NEW_ID.equals(parentMediaId)) {
-            return loadAlbums("sort:new");
-        } else if (ALBUMS_RANDOM_ID.equals(parentMediaId)) {
-            return loadAlbums("sort:random");
+        } else if (parentMediaId.equals(ALBUMS_NEW_ID)) {
+            return loadAlbums("sort:new", 0);
+        } else if (parentMediaId.equals(ALBUMS_RANDOM_ID) || parentMediaId.startsWith(ALBUMS_RANDOM_ID + "/")) {
+            return loadAlbums("sort:random", parseOffset(parentMediaId, ALBUMS_RANDOM_ID));
         } else if (FAVORITES_ID.equals(parentMediaId)) {
             return loadFavorites();
         } else if (PLAYLISTS_ID.equals(parentMediaId)) {
@@ -228,6 +246,17 @@ public class LmsBrowseHelper {
             return loadFavoriteFolder(parentMediaId.substring(16));
         }
         return new ArrayList<>();
+    }
+
+    private int parseOffset(String mediaId, String prefix) {
+        if (mediaId.length() > prefix.length() + 1) {
+            try {
+                return Integer.parseInt(mediaId.substring(prefix.length() + 1));
+            } catch (NumberFormatException e) {
+                // ignore
+            }
+        }
+        return 0;
     }
 
     private List<MediaBrowserCompat.MediaItem> loadRoot() {
@@ -254,19 +283,18 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ALL_RELEASES_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
         items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadAlbumArtists() {
+    private List<MediaBrowserCompat.MediaItem> loadAlbumArtists(int offset) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             List<String> params = new ArrayList<>();
             params.add("artists");
-            params.add("0");
-            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add(String.valueOf(offset));
+            params.add(String.valueOf(PAGE_SIZE));
             params.add("role_id:5");
             params.add("tags:s");
             addLibraryParam(params);
@@ -283,19 +311,26 @@ public class LmsBrowseHelper {
                 String name = artist.optString("artist", "");
                 items.add(buildBrowsableItem("artist/" + id, name, null));
             }
+
+            int total = result.optInt("count", 0);
+            int nextOffset = offset + PAGE_SIZE;
+            if (nextOffset < total) {
+                items.add(buildBrowsableItem(ALBUM_ARTISTS_ID + "/" + nextOffset,
+                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+            }
         } catch (Exception e) {
             Utils.error("Failed to load album artists", e);
         }
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadAllArtists() {
+    private List<MediaBrowserCompat.MediaItem> loadAllArtists(int offset) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             List<String> params = new ArrayList<>();
             params.add("artists");
-            params.add("0");
-            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add(String.valueOf(offset));
+            params.add(String.valueOf(PAGE_SIZE));
             params.add("tags:s");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
@@ -311,6 +346,13 @@ public class LmsBrowseHelper {
                 String name = artist.optString("artist", "");
                 items.add(buildBrowsableItem("artist/" + id, name, null));
             }
+
+            int total = result.optInt("count", 0);
+            int nextOffset = offset + PAGE_SIZE;
+            if (nextOffset < total) {
+                items.add(buildBrowsableItem(ALL_ARTISTS_ID + "/" + nextOffset,
+                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+            }
         } catch (Exception e) {
             Utils.error("Failed to load artists", e);
         }
@@ -323,7 +365,7 @@ public class LmsBrowseHelper {
             List<String> params = new ArrayList<>();
             params.add("artists");
             params.add("0");
-            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add(String.valueOf(getBrowseAgeLimit()));
             params.add("sort:new");
             params.add("tags:s");
             addLibraryParam(params);
@@ -346,13 +388,16 @@ public class LmsBrowseHelper {
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadAlbums(String sortParam) {
+    private List<MediaBrowserCompat.MediaItem> loadAlbums(String sortParam, int offset) {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
+            boolean isNew = "sort:new".equals(sortParam);
+            int limit = isNew ? getBrowseAgeLimit() : PAGE_SIZE;
+
             List<String> params = new ArrayList<>();
             params.add("albums");
-            params.add("0");
-            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add(String.valueOf(offset));
+            params.add(String.valueOf(limit));
             if (null!=sortParam) {
                 params.add(sortParam);
             }
@@ -379,6 +424,16 @@ public class LmsBrowseHelper {
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
                 items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+            }
+
+            if (!isNew) {
+                String baseId = ALBUMS_RANDOM_ID;
+                int total = result.optInt("count", 0);
+                int nextOffset = offset + limit;
+                if (nextOffset < total) {
+                    items.add(buildBrowsableItem(baseId + "/" + nextOffset,
+                            "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+                }
             }
         } catch (Exception e) {
             Utils.error("Failed to load albums", e);
