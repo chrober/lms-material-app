@@ -423,16 +423,7 @@ public class LmsBrowseHelper {
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject item = loop.getJSONObject(i);
-                String id = item.optString("id", "");
-                String name = item.optString("name", "");
-                String image = item.optString("image", item.optString("icon", ""));
-                boolean hasItems = item.optInt("hasitems", 0) > 0;
-
-                if (hasItems) {
-                    items.add(buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image)));
-                } else {
-                    items.add(buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image)));
-                }
+                items.add(buildFavoriteMediaItem(item));
             }
         } catch (Exception e) {
             Utils.error("Failed to load favorites", e);
@@ -453,21 +444,79 @@ public class LmsBrowseHelper {
 
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject item = loop.getJSONObject(i);
-                String id = item.optString("id", "");
-                String name = item.optString("name", "");
-                String image = item.optString("image", item.optString("icon", ""));
-                boolean hasItems = item.optInt("hasitems", 0) > 0;
-
-                if (hasItems) {
-                    items.add(buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image)));
-                } else {
-                    items.add(buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image)));
-                }
+                items.add(buildFavoriteMediaItem(item));
             }
         } catch (Exception e) {
             Utils.error("Failed to load favorite folder", e);
         }
         return items;
+    }
+
+    private MediaBrowserCompat.MediaItem buildFavoriteMediaItem(JSONObject item) {
+        String id = item.optString("id", "");
+        String name = item.optString("name", "");
+        String image = item.optString("image", item.optString("icon", ""));
+        boolean hasItems = item.optInt("hasitems", 0) > 0;
+        String url = item.optString("url", "");
+
+        if (hasItems) {
+            return buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image));
+        }
+
+        if (url.contains("contributor.name")) {
+            String artistId = lookupArtistIdByName(name);
+            if (null!=artistId) {
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + artistId + "/image_300x300_f");
+                return buildBrowsableItem("artist/" + artistId, name, artUri);
+            }
+        }
+
+        if (url.contains("album.title")) {
+            String albumId = lookupAlbumIdByName(name);
+            if (null!=albumId) {
+                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(image));
+            }
+        }
+
+        return buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image));
+    }
+
+    private String lookupArtistIdByName(String name) {
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"artists", "0", "1", "search:" + name, "tags:s"}, TIMEOUT_MS);
+            if (null!=resp) {
+                JSONObject result = resp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("artists_loop");
+                    if (null!=loop && loop.length() > 0) {
+                        return loop.getJSONObject(0).optString("id", null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to lookup artist: " + name);
+        }
+        return null;
+    }
+
+    private String lookupAlbumIdByName(String name) {
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"albums", "0", "1", "search:" + name, "tags:j"}, TIMEOUT_MS);
+            if (null!=resp) {
+                JSONObject result = resp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("albums_loop");
+                    if (null!=loop && loop.length() > 0) {
+                        return loop.getJSONObject(0).optString("id", null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to lookup album: " + name);
+        }
+        return null;
     }
 
     private List<MediaBrowserCompat.MediaItem> loadPlaylists() {
