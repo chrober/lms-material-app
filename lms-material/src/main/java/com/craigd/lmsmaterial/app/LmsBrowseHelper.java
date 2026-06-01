@@ -521,6 +521,10 @@ public class LmsBrowseHelper {
                     String id = album.optString("id", "");
                     String title = album.optString("album", "");
                     String artist = album.optString("artist", "");
+                    int year = album.optInt("year", 0);
+                    if (year > 0) {
+                        title = title + " (" + year + ")";
+                    }
                     String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                     Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
                     items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
@@ -534,7 +538,18 @@ public class LmsBrowseHelper {
                     String id = track.optString("id", "");
                     String title = track.optString("track", "");
                     String artist = track.optString("artist", "");
-                    items.add(buildPlayableItemWithGroup("track/" + id, title, artist, null, songsGroup));
+                    String albumName = track.optString("album", "");
+                    int year = track.optInt("year", 0);
+                    StringBuilder subtitle = new StringBuilder();
+                    if (!artist.isEmpty()) {
+                        subtitle.append(artist);
+                    }
+                    if (!albumName.isEmpty()) {
+                        if (subtitle.length() > 0) subtitle.append(" \u2014 ");
+                        subtitle.append(albumName);
+                        if (year > 0) subtitle.append(" (").append(year).append(")");
+                    }
+                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, null, songsGroup));
                 }
             }
         } catch (Exception e) {
