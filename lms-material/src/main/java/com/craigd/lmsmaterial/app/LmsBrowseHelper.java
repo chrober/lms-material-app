@@ -39,11 +39,13 @@ public class LmsBrowseHelper {
     public static final String FAVORITES_ID = "__FAVORITES__";
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
+    public static final String LIBRARIES_ID = "__LIBRARIES__";
 
-    private static final int BROWSE_LIMIT = 100;
-    private static final int TIMEOUT_MS = 10000;
+    private static final int BROWSE_LIMIT = 10000;
+    private static final int SEARCH_LIMIT = 50;
+    private static final int TIMEOUT_MS = 15000;
 
-    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS";
+    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY";
 
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
@@ -93,6 +95,8 @@ public class LmsBrowseHelper {
         labels.put("ARTISTS", "Artists");
         labels.put("ALBUMS", "Albums");
         labels.put("SONGS", "Songs");
+        labels.put("LIBRARY", "Library");
+        labels.put("ALL_TRACKS", "All");
         try {
             JSONObject resp = rpc.sendMessageSync("", new String[]{"getstring", LABEL_TOKENS}, TIMEOUT_MS);
             if (null!=resp) {
@@ -127,7 +131,14 @@ public class LmsBrowseHelper {
     }
 
     private String getLibraryId() {
-        return MainActivity.activeLibrary;
+        String lib = MainActivity.activeLibrary;
+        if (null==lib) {
+            lib = prefs.getString("active_library", null);
+            if (null!=lib) {
+                MainActivity.activeLibrary = lib;
+            }
+        }
+        return lib;
     }
 
     private void addLibraryParam(List<String> params) {
@@ -162,6 +173,8 @@ public class LmsBrowseHelper {
             return loadPlaylists();
         } else if (PLAYERS_ID.equals(parentMediaId)) {
             return loadPlayers();
+        } else if (LIBRARIES_ID.equals(parentMediaId)) {
+            return loadLibraries();
         } else if (parentMediaId.startsWith("artist/")) {
             return loadArtistAlbums(parentMediaId.substring(7));
         } else if (parentMediaId.startsWith("album/")) {
@@ -182,6 +195,7 @@ public class LmsBrowseHelper {
         items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
         items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
         items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
+        items.add(buildBrowsableItem(LIBRARIES_ID, getLabel("LIBRARY"), drawableUri(R.drawable.ic_library)));
         return items;
     }
 
@@ -532,74 +546,133 @@ public class LmsBrowseHelper {
         return items;
     }
 
+    private List<MediaBrowserCompat.MediaItem> loadLibraries() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"libraries"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("folder_loop");
+            if (null==loop) return items;
+
+            String currentLib = getLibraryId();
+            boolean hasSelection = (null!=currentLib);
+
+            items.add(buildPlayableItem("library/__ALL__",
+                    (!hasSelection ? "\u2713 " : "") + getLabel("ALL_TRACKS"), null, null));
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject lib = loop.getJSONObject(i);
+                String id = lib.optString("id", "");
+                String name = lib.optString("name", "");
+                boolean isActive = id.equals(currentLib);
+                String title = (isActive ? "\u2713 " : "") + name;
+                items.add(buildPlayableItem("library/" + id, title, null, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load libraries", e);
+        }
+        return items;
+    }
+
     public List<MediaBrowserCompat.MediaItem> search(String query) {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
-            List<String> params = new ArrayList<>();
-            params.add("search");
-            params.add("0");
-            params.add(String.valueOf(BROWSE_LIMIT));
-            params.add("term:" + query);
-            addLibraryParam(params);
-            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
-            if (null==resp) return items;
-            JSONObject result = resp.optJSONObject("result");
-            if (null==result) return items;
-
             String artistsGroup = getLabel("ARTISTS");
             String albumsGroup = getLabel("ALBUMS");
             String songsGroup = getLabel("SONGS");
 
-            JSONArray artists = result.optJSONArray("contributors_loop");
-            if (null!=artists) {
-                for (int i = 0; i < artists.length(); i++) {
-                    JSONObject artist = artists.getJSONObject(i);
-                    String id = artist.optString("id", "");
-                    String name = artist.optString("contributor", "");
-                    Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
-                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, artistsGroup));
+            List<String> artistParams = new ArrayList<>();
+            artistParams.add("artists");
+            artistParams.add("0");
+            artistParams.add(String.valueOf(SEARCH_LIMIT));
+            artistParams.add("search:" + query);
+            artistParams.add("tags:s");
+            addLibraryParam(artistParams);
+            JSONObject artistResp = rpc.sendMessageSync("", artistParams.toArray(new String[0]), TIMEOUT_MS);
+            if (null!=artistResp) {
+                JSONObject result = artistResp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("artists_loop");
+                    if (null!=loop) {
+                        for (int i = 0; i < loop.length(); i++) {
+                            JSONObject artist = loop.getJSONObject(i);
+                            String id = artist.optString("id", "");
+                            String name = artist.optString("artist", "");
+                            Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                            items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, artistsGroup));
+                        }
+                    }
                 }
             }
 
-            JSONArray albums = result.optJSONArray("albums_loop");
-            if (null!=albums) {
-                for (int i = 0; i < albums.length(); i++) {
-                    JSONObject album = albums.getJSONObject(i);
-                    String id = album.optString("id", "");
-                    String title = album.optString("album", "");
-                    String artist = album.optString("artist", "");
-                    int year = album.optInt("year", 0);
-                    if (year > 0) {
-                        title = title + " (" + year + ")";
+            List<String> albumParams = new ArrayList<>();
+            albumParams.add("albums");
+            albumParams.add("0");
+            albumParams.add(String.valueOf(SEARCH_LIMIT));
+            albumParams.add("search:" + query);
+            albumParams.add("tags:ajlsy");
+            addLibraryParam(albumParams);
+            JSONObject albumResp = rpc.sendMessageSync("", albumParams.toArray(new String[0]), TIMEOUT_MS);
+            if (null!=albumResp) {
+                JSONObject result = albumResp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("albums_loop");
+                    if (null!=loop) {
+                        for (int i = 0; i < loop.length(); i++) {
+                            JSONObject album = loop.getJSONObject(i);
+                            String id = album.optString("id", "");
+                            String title = album.optString("album", "");
+                            String artist = album.optString("artist", "");
+                            int year = album.optInt("year", 0);
+                            if (year > 0) {
+                                title = title + " (" + year + ")";
+                            }
+                            String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                            Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                            items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
+                        }
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
                 }
             }
 
-            JSONArray tracks = result.optJSONArray("tracks_loop");
-            if (null!=tracks) {
-                for (int i = 0; i < tracks.length(); i++) {
-                    JSONObject track = tracks.getJSONObject(i);
-                    String id = track.optString("id", "");
-                    String title = track.optString("track", "");
-                    String artist = track.optString("artist", "");
-                    String albumName = track.optString("album", "");
-                    int year = track.optInt("year", 0);
-                    String coverId = track.optString("coverid", track.optString("artwork_track_id", ""));
-                    Uri artUri = !coverId.isEmpty() ? resolveImageUri("/music/" + coverId + "/cover") : null;
-                    StringBuilder subtitle = new StringBuilder();
-                    if (!artist.isEmpty()) {
-                        subtitle.append(artist);
+            List<String> trackParams = new ArrayList<>();
+            trackParams.add("titles");
+            trackParams.add("0");
+            trackParams.add(String.valueOf(SEARCH_LIMIT));
+            trackParams.add("search:" + query);
+            trackParams.add("tags:adlsy");
+            addLibraryParam(trackParams);
+            JSONObject trackResp = rpc.sendMessageSync("", trackParams.toArray(new String[0]), TIMEOUT_MS);
+            if (null!=trackResp) {
+                JSONObject result = trackResp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("titles_loop");
+                    if (null!=loop) {
+                        for (int i = 0; i < loop.length(); i++) {
+                            JSONObject track = loop.getJSONObject(i);
+                            String id = track.optString("id", "");
+                            String title = track.optString("title", "");
+                            String artist = track.optString("artist", "");
+                            String albumName = track.optString("album", "");
+                            int year = track.optInt("year", 0);
+                            String coverId = track.optString("coverid", track.optString("artwork_track_id", id));
+                            Uri artUri = resolveImageUri("/music/" + coverId + "/cover");
+                            StringBuilder subtitle = new StringBuilder();
+                            if (!artist.isEmpty()) {
+                                subtitle.append(artist);
+                            }
+                            if (!albumName.isEmpty()) {
+                                if (subtitle.length() > 0) subtitle.append(" \u2014 ");
+                                subtitle.append(albumName);
+                                if (year > 0) subtitle.append(" (").append(year).append(")");
+                            }
+                            items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, artUri, songsGroup));
+                        }
                     }
-                    if (!albumName.isEmpty()) {
-                        if (subtitle.length() > 0) subtitle.append(" \u2014 ");
-                        subtitle.append(albumName);
-                        if (year > 0) subtitle.append(" (").append(year).append(")");
-                    }
-                    items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, artUri, songsGroup));
                 }
             }
         } catch (Exception e) {
@@ -611,6 +684,9 @@ public class LmsBrowseHelper {
     public boolean playMediaId(String mediaId) {
         if (mediaId.startsWith("player/")) {
             switchPlayer(mediaId.substring(7));
+            return true;
+        } else if (mediaId.startsWith("library/")) {
+            switchLibrary(mediaId.substring(8));
             return true;
         } else if (mediaId.startsWith("album/")) {
             sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
@@ -637,6 +713,16 @@ public class LmsBrowseHelper {
 
     private void switchPlayer(String playerId) {
         MainActivity.activePlayer = playerId;
+    }
+
+    private void switchLibrary(String libraryId) {
+        if ("__ALL__".equals(libraryId)) {
+            MainActivity.activeLibrary = null;
+            prefs.edit().remove("active_library").apply();
+        } else {
+            MainActivity.activeLibrary = libraryId;
+            prefs.edit().putString("active_library", libraryId).apply();
+        }
     }
 
     private Uri drawableUri(int resId) {
