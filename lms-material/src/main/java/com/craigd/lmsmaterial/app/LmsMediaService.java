@@ -190,6 +190,19 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
             try {
                 List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().loadChildren(parentId);
                 result.sendResult(items);
+                if (parentId.startsWith("player/")) {
+                    handler.post(() -> {
+                        if (null!=cometClient) {
+                            cometClient.setPlayer(MainActivity.activePlayer);
+                            if (!cometClient.isConnected()) {
+                                cometClient.connect();
+                            }
+                        }
+                        notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+                    });
+                } else if (parentId.startsWith("library/")) {
+                    handler.post(() -> notifyChildrenChanged(LmsBrowseHelper.LIBRARIES_ID));
+                }
             } catch (Exception e) {
                 Utils.error("Failed to load children for: " + parentId, e);
                 result.sendResult(new ArrayList<>());
@@ -258,15 +271,6 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
                 @Override
                 public void onPlayFromMediaId(String mediaId, Bundle extras) {
                     Utils.debug("playFromMediaId: " + mediaId);
-                    if (mediaId.startsWith("player/")) {
-                        getBrowseHelper().playMediaId(mediaId);
-                        notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
-                        return;
-                    } else if (mediaId.startsWith("library/")) {
-                        getBrowseHelper().playMediaId(mediaId);
-                        notifyChildrenChanged(LmsBrowseHelper.LIBRARIES_ID);
-                        return;
-                    }
                     mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
                             .setState(PlaybackStateCompat.STATE_BUFFERING, 0, 0f)
                             .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE

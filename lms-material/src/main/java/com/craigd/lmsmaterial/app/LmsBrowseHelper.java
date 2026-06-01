@@ -236,6 +236,12 @@ public class LmsBrowseHelper {
             return loadPlayers();
         } else if (LIBRARIES_ID.equals(parentMediaId)) {
             return loadLibraries();
+        } else if (parentMediaId.startsWith("player/")) {
+            switchPlayer(parentMediaId.substring(7));
+            return loadPlayers();
+        } else if (parentMediaId.startsWith("library/")) {
+            switchLibrary(parentMediaId.substring(8));
+            return loadLibraries();
         } else if (parentMediaId.startsWith("artist/")) {
             return loadArtistAlbums(parentMediaId.substring(7));
         } else if (parentMediaId.startsWith("album/")) {
@@ -730,7 +736,7 @@ public class LmsBrowseHelper {
                 boolean isActive = id.equals(currentPlayer);
                 String title = (isActive ? "\u2713 " : "") + name;
                 String subtitle = isConnected ? "Connected" : "Disconnected";
-                items.add(buildPlayableItem("player/" + id, title, subtitle, null));
+                items.add(buildBrowsableItem("player/" + id, title, subtitle, null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load players", e);
@@ -752,7 +758,7 @@ public class LmsBrowseHelper {
             String currentLib = getLibraryId();
             boolean hasSelection = (null!=currentLib);
 
-            items.add(buildPlayableItem("library/__ALL__",
+            items.add(buildBrowsableItem("library/__ALL__",
                     (!hasSelection ? "\u2713 " : "") + getLabel("ALL_TRACKS"), null, null));
 
             for (int i = 0; i < loop.length(); i++) {
@@ -761,7 +767,7 @@ public class LmsBrowseHelper {
                 String name = lib.optString("name", "");
                 boolean isActive = id.equals(currentLib);
                 String title = (isActive ? "\u2713 " : "") + name;
-                items.add(buildPlayableItem("library/" + id, title, null, null));
+                items.add(buildBrowsableItem("library/" + id, title, null, null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load libraries", e);
@@ -874,13 +880,7 @@ public class LmsBrowseHelper {
     }
 
     public boolean playMediaId(String mediaId) {
-        if (mediaId.startsWith("player/")) {
-            switchPlayer(mediaId.substring(7));
-            return true;
-        } else if (mediaId.startsWith("library/")) {
-            switchLibrary(mediaId.substring(8));
-            return true;
-        } else if (mediaId.startsWith("album/")) {
+        if (mediaId.startsWith("album/")) {
             sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
             return true;
         } else if (mediaId.startsWith("track/")) {
