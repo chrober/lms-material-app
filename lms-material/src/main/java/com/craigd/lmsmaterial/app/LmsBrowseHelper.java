@@ -148,7 +148,7 @@ public class LmsBrowseHelper {
             return loadPlayers();
         } else if (parentMediaId.startsWith("player/")) {
             switchPlayer(parentMediaId.substring(7));
-            return loadRoot();
+            return loadPlayers();
         } else if (parentMediaId.startsWith("artist/")) {
             return loadArtistAlbums(parentMediaId.substring(7));
         } else if (parentMediaId.startsWith("album/")) {
@@ -165,7 +165,7 @@ public class LmsBrowseHelper {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
-        items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_new_releases)));
+        items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
         items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
         items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
@@ -175,18 +175,18 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadArtistsGroup() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ALBUM_ARTISTS_ID, getLabel("BROWSE_BY_ALBUMARTIST"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(ALBUM_ARTISTS_ID, getLabel("BROWSE_BY_ALBUMARTIST"), drawableUri(R.drawable.ic_album_artist)));
         items.add(buildBrowsableItem(ALL_ARTISTS_ID, getLabel("BROWSE_BY_ALL_ARTISTS"), drawableUri(R.drawable.ic_artist)));
-        items.add(buildBrowsableItem(NEW_ARTISTS_ID, getLabel("NEW_ARTISTS"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(NEW_ARTISTS_ID, getLabel("NEW_ARTISTS"), drawableUri(R.drawable.ic_artist_new)));
         return items;
     }
 
     private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ALL_RELEASES_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_new_releases)));
+        items.add(buildBrowsableItem(ALL_RELEASES_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
-        items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_shuffle)));
+        items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
         return items;
     }
 
@@ -194,7 +194,7 @@ public class LmsBrowseHelper {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "role_id:ALBUMARTIST", "tags:s"}, TIMEOUT_MS);
+                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "role_id:5", "tags:s"}, TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -290,7 +290,7 @@ public class LmsBrowseHelper {
                 }
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildBrowsablePlayableItem("album/" + id, title, artist, artUri));
+                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load albums", e);
@@ -319,7 +319,7 @@ public class LmsBrowseHelper {
                 }
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildBrowsablePlayableItem("album/" + id, title, null, artUri));
+                items.add(buildPlayableItem("album/" + id, title, null, artUri));
             }
         } catch (Exception e) {
             Utils.error("Failed to load artist albums", e);
@@ -494,12 +494,12 @@ public class LmsBrowseHelper {
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
 
-            JSONArray artists = result.optJSONArray("artists_loop");
+            JSONArray artists = result.optJSONArray("contributors_loop");
             if (null!=artists) {
                 for (int i = 0; i < artists.length(); i++) {
                     JSONObject artist = artists.getJSONObject(i);
                     String id = artist.optString("id", "");
-                    String name = artist.optString("artist", "");
+                    String name = artist.optString("contributor", "");
                     items.add(buildBrowsableItem("artist/" + id, name, null));
                 }
             }
@@ -513,7 +513,7 @@ public class LmsBrowseHelper {
                     String artist = album.optString("artist", "");
                     String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                     Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildBrowsablePlayableItem("album/" + id, title, artist, artUri));
+                    items.add(buildPlayableItem("album/" + id, title, artist, artUri));
                 }
             }
 
