@@ -19,28 +19,35 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 public class LmsBrowseHelper {
     public static final String ROOT_ID = "__ROOT__";
-    public static final String FAVORITES_ID = "__FAVORITES__";
-    public static final String ARTISTS_ID = "__ARTISTS__";
-    public static final String ALBUMS_ID = "__ALBUMS__";
+    public static final String ARTISTS_GROUP_ID = "__ARTISTS_GROUP__";
+    public static final String RELEASES_GROUP_ID = "__RELEASES_GROUP__";
+    public static final String ALBUM_ARTISTS_ID = "__ALBUM_ARTISTS__";
+    public static final String ALL_ARTISTS_ID = "__ALL_ARTISTS__";
+    public static final String NEW_ARTISTS_ID = "__NEW_ARTISTS__";
+    public static final String ALL_RELEASES_ID = "__ALL_RELEASES__";
     public static final String ALBUMS_NEW_ID = "__ALBUMS_NEW__";
-    public static final String ALBUMS_RECENT_ID = "__ALBUMS_RECENT__";
     public static final String ALBUMS_RANDOM_ID = "__ALBUMS_RANDOM__";
+    public static final String FAVORITES_ID = "__FAVORITES__";
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
-    public static final String RADIOS_ID = "__RADIOS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
 
-    private static final String PREFS_HOME_ITEMS_KEY = "auto_home_items";
     private static final int BROWSE_LIMIT = 100;
     private static final int TIMEOUT_MS = 10000;
+
+    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX";
 
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
     private final String packageName;
     private Boolean showYear = null;
+    private Map<String, String> labels = null;
 
     public LmsBrowseHelper(Context context) {
         rpc = new JsonRpc(context);
@@ -68,23 +75,75 @@ public class LmsBrowseHelper {
         return showYear;
     }
 
+    private void ensureLabelsLoaded() {
+        if (null!=labels) return;
+        labels = new HashMap<>();
+        labels.put("BROWSE_BY_ARTIST", "Artists");
+        labels.put("BROWSE_BY_ALBUMARTIST", "Album Artists");
+        labels.put("BROWSE_BY_ALL_ARTISTS", "All Artists");
+        labels.put("BROWSE_BY_ALBUM", "Albums");
+        labels.put("BROWSE_NEW_MUSIC", "New Music");
+        labels.put("FAVORITES", "Favorites");
+        labels.put("SAVED_PLAYLISTS", "Playlists");
+        labels.put("PLAYERS", "Players");
+        labels.put("NEW_ARTISTS", "New Artists");
+        labels.put("RANDOM_ALBUMS", "Random Albums");
+        try {
+            JSONObject resp = rpc.sendMessageSync("", new String[]{"getstring", LABEL_TOKENS}, TIMEOUT_MS);
+            if (null!=resp) {
+                JSONObject result = resp.optJSONObject("result");
+                if (null!=result) {
+                    Iterator<String> keys = result.keys();
+                    while (keys.hasNext()) {
+                        String key = keys.next();
+                        String value = result.optString(key, "");
+                        if (!value.isEmpty()) {
+                            labels.put(key, value);
+                        }
+                    }
+                    String newArtists = result.optString("PLUGIN_MATERIAL_SKIN_NEW_ARTISTS", "");
+                    if (!newArtists.isEmpty()) {
+                        labels.put("NEW_ARTISTS", newArtists);
+                    }
+                    String randomMix = result.optString("PLUGIN_MATERIAL_SKIN_RANDOM_MIX", "");
+                    if (!randomMix.isEmpty()) {
+                        labels.put("RANDOM_ALBUMS", randomMix);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to load labels from server");
+        }
+    }
+
+    private String getLabel(String key) {
+        String val = labels.get(key);
+        return null!=val ? val : key;
+    }
+
     public List<MediaBrowserCompat.MediaItem> loadChildren(String parentMediaId) {
         if (ROOT_ID.equals(parentMediaId)) {
             return loadRoot();
-        } else if (FAVORITES_ID.equals(parentMediaId)) {
-            return loadFavorites();
-        } else if (ARTISTS_ID.equals(parentMediaId)) {
-            return loadArtists();
-        } else if (ALBUMS_ID.equals(parentMediaId) || ALBUMS_NEW_ID.equals(parentMediaId)) {
+        } else if (ARTISTS_GROUP_ID.equals(parentMediaId)) {
+            return loadArtistsGroup();
+        } else if (RELEASES_GROUP_ID.equals(parentMediaId)) {
+            return loadReleasesGroup();
+        } else if (ALBUM_ARTISTS_ID.equals(parentMediaId)) {
+            return loadAlbumArtists();
+        } else if (ALL_ARTISTS_ID.equals(parentMediaId)) {
+            return loadAllArtists();
+        } else if (NEW_ARTISTS_ID.equals(parentMediaId)) {
+            return loadNewArtists();
+        } else if (ALL_RELEASES_ID.equals(parentMediaId)) {
+            return loadAlbums(null);
+        } else if (ALBUMS_NEW_ID.equals(parentMediaId)) {
             return loadAlbums("sort:new");
-        } else if (ALBUMS_RECENT_ID.equals(parentMediaId)) {
-            return loadAlbums("sort:recentlyplayed");
         } else if (ALBUMS_RANDOM_ID.equals(parentMediaId)) {
             return loadAlbums("sort:random");
+        } else if (FAVORITES_ID.equals(parentMediaId)) {
+            return loadFavorites();
         } else if (PLAYLISTS_ID.equals(parentMediaId)) {
             return loadPlaylists();
-        } else if (RADIOS_ID.equals(parentMediaId)) {
-            return loadRadios();
         } else if (PLAYERS_ID.equals(parentMediaId)) {
             return loadPlayers();
         } else if (parentMediaId.startsWith("player/")) {
@@ -96,108 +155,65 @@ public class LmsBrowseHelper {
             return loadAlbumTracks(parentMediaId.substring(6));
         } else if (parentMediaId.startsWith("playlist/")) {
             return loadPlaylistTracks(parentMediaId.substring(9));
+        } else if (parentMediaId.startsWith("favorite_folder/")) {
+            return loadFavoriteFolder(parentMediaId.substring(16));
         }
         return new ArrayList<>();
     }
 
     private List<MediaBrowserCompat.MediaItem> loadRoot() {
+        ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        String homeItemsJson = prefs.getString(PREFS_HOME_ITEMS_KEY, null);
-        String[] homeItems;
-
-        if (null!=homeItemsJson && !homeItemsJson.isEmpty() && !"[]".equals(homeItemsJson)) {
-            try {
-                JSONArray arr = new JSONArray(homeItemsJson);
-                if (arr.length() > 0) {
-                    homeItems = new String[arr.length()];
-                    for (int i = 0; i < arr.length(); i++) {
-                        Object element = arr.get(i);
-                        if (element instanceof JSONObject) {
-                            homeItems[i] = ((JSONObject) element).optString("id", "");
-                        } else {
-                            homeItems[i] = arr.getString(i);
-                        }
-                    }
-                } else {
-                    homeItems = getDefaultHomeItems();
-                }
-            } catch (Exception e) {
-                homeItems = getDefaultHomeItems();
-            }
-        } else {
-            homeItems = getDefaultHomeItems();
-        }
-
-        for (String item : homeItems) {
-            MediaBrowserCompat.MediaItem mi = mapHomeItemToMediaItem(item);
-            if (null!=mi) {
-                items.add(mi);
-            }
-            if (items.size() >= 6) break;
-        }
-
-        items.add(buildBrowsableItem(PLAYERS_ID, "Players", drawableUri(R.drawable.ic_speaker)));
+        items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_new_releases)));
+        items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
+        items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
+        items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
         return items;
     }
 
-    private String[] getDefaultHomeItems() {
-        return new String[]{"std_favorites", "std_new", "std_radios", "std_playlists"};
+    private List<MediaBrowserCompat.MediaItem> loadArtistsGroup() {
+        ensureLabelsLoaded();
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        items.add(buildBrowsableItem(ALBUM_ARTISTS_ID, getLabel("BROWSE_BY_ALBUMARTIST"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(ALL_ARTISTS_ID, getLabel("BROWSE_BY_ALL_ARTISTS"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(NEW_ARTISTS_ID, getLabel("NEW_ARTISTS"), drawableUri(R.drawable.ic_artist)));
+        return items;
     }
 
-    private MediaBrowserCompat.MediaItem mapHomeItemToMediaItem(String stdId) {
-        switch (stdId) {
-            case "std_favorites":
-                return buildBrowsableItem(FAVORITES_ID, "Favorites", drawableUri(R.drawable.ic_favorite));
-            case "std_new":
-                return buildBrowsableItem(ALBUMS_NEW_ID, "New Music", drawableUri(R.drawable.ic_new_releases));
-            case "std_radios":
-                return buildBrowsableItem(RADIOS_ID, "Radio", drawableUri(R.drawable.ic_radio));
-            case "std_playlists":
-                return buildBrowsableItem(PLAYLISTS_ID, "Playlists", drawableUri(R.drawable.ic_playlist));
-            case "std_explore":
-                return buildBrowsableItem(ARTISTS_ID, "Artists", drawableUri(R.drawable.ic_artist));
-            case "std_recentlyplayed":
-                return buildBrowsableItem(ALBUMS_RECENT_ID, "Recently Played", drawableUri(R.drawable.ic_history));
-            case "std_random":
-                return buildBrowsableItem(ALBUMS_RANDOM_ID, "Random", drawableUri(R.drawable.ic_shuffle));
-            case "std_playcount":
-                return buildBrowsableItem("__ALBUMS_PLAYCOUNT__", "Most Played", drawableUri(R.drawable.ic_star));
-            default:
-                return null;
-        }
+    private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
+        ensureLabelsLoaded();
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        items.add(buildBrowsableItem(ALL_RELEASES_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_new_releases)));
+        items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
+        items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_shuffle)));
+        return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadFavorites() {
+    private List<MediaBrowserCompat.MediaItem> loadAlbumArtists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "want_url:1"}, TIMEOUT_MS);
+                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "role_id:ALBUMARTIST", "tags:s"}, TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
-            JSONArray loop = result.optJSONArray("loop_loop");
+            JSONArray loop = result.optJSONArray("artists_loop");
             if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
-                JSONObject item = loop.getJSONObject(i);
-                String id = item.optString("id", "");
-                String name = item.optString("name", "");
-                String image = item.optString("image", item.optString("icon", ""));
-                boolean hasItems = item.optInt("hasitems", 0) > 0;
-
-                if (hasItems) {
-                    items.add(buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image)));
-                } else {
-                    items.add(buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image)));
-                }
+                JSONObject artist = loop.getJSONObject(i);
+                String id = artist.optString("id", "");
+                String name = artist.optString("artist", "");
+                items.add(buildBrowsableItem("artist/" + id, name, null));
             }
         } catch (Exception e) {
-            Utils.error("Failed to load favorites", e);
+            Utils.error("Failed to load album artists", e);
         }
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadArtists() {
+    private List<MediaBrowserCompat.MediaItem> loadAllArtists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
@@ -220,11 +236,43 @@ public class LmsBrowseHelper {
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadAlbums(String sortParam) {
+    private List<MediaBrowserCompat.MediaItem> loadNewArtists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"albums", "0", String.valueOf(BROWSE_LIMIT), sortParam, "tags:ajlsy"}, TIMEOUT_MS);
+                    new String[]{"artists", "0", String.valueOf(BROWSE_LIMIT), "sort:new", "tags:s"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("artists_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject artist = loop.getJSONObject(i);
+                String id = artist.optString("id", "");
+                String name = artist.optString("artist", "");
+                items.add(buildBrowsableItem("artist/" + id, name, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load new artists", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbums(String sortParam) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            if (null!=sortParam) {
+                params.add(sortParam);
+            }
+            params.add("tags:ajlsy");
+
+            JSONObject resp = rpc.sendMessageSync("",
+                    params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -304,6 +352,66 @@ public class LmsBrowseHelper {
         return items;
     }
 
+    private List<MediaBrowserCompat.MediaItem> loadFavorites() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "want_url:1"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("loop_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject item = loop.getJSONObject(i);
+                String id = item.optString("id", "");
+                String name = item.optString("name", "");
+                String image = item.optString("image", item.optString("icon", ""));
+                boolean hasItems = item.optInt("hasitems", 0) > 0;
+
+                if (hasItems) {
+                    items.add(buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image)));
+                } else {
+                    items.add(buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image)));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load favorites", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadFavoriteFolder(String folderId) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "item_id:" + folderId, "want_url:1"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("loop_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject item = loop.getJSONObject(i);
+                String id = item.optString("id", "");
+                String name = item.optString("name", "");
+                String image = item.optString("image", item.optString("icon", ""));
+                boolean hasItems = item.optInt("hasitems", 0) > 0;
+
+                if (hasItems) {
+                    items.add(buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image)));
+                } else {
+                    items.add(buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image)));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load favorite folder", e);
+        }
+        return items;
+    }
+
     private List<MediaBrowserCompat.MediaItem> loadPlaylists() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
@@ -352,33 +460,6 @@ public class LmsBrowseHelper {
         return items;
     }
 
-    private List<MediaBrowserCompat.MediaItem> loadRadios() {
-        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        try {
-            JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "type:audio", "want_url:1"}, TIMEOUT_MS);
-            if (null==resp) return items;
-            JSONObject result = resp.optJSONObject("result");
-            if (null==result) return items;
-            JSONArray loop = result.optJSONArray("loop_loop");
-            if (null==loop) return items;
-
-            for (int i = 0; i < loop.length(); i++) {
-                JSONObject item = loop.getJSONObject(i);
-                String id = item.optString("id", "");
-                String name = item.optString("name", "");
-                String image = item.optString("image", item.optString("icon", ""));
-                String type = item.optString("type", "");
-                if ("audio".equals(type)) {
-                    items.add(buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image)));
-                }
-            }
-        } catch (Exception e) {
-            Utils.error("Failed to load radios", e);
-        }
-        return items;
-    }
-
     private List<MediaBrowserCompat.MediaItem> loadPlayers() {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
@@ -400,6 +481,54 @@ public class LmsBrowseHelper {
             }
         } catch (Exception e) {
             Utils.error("Failed to load players", e);
+        }
+        return items;
+    }
+
+    public List<MediaBrowserCompat.MediaItem> search(String query) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"search", "0", String.valueOf(BROWSE_LIMIT), "term:" + query}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+
+            JSONArray artists = result.optJSONArray("artists_loop");
+            if (null!=artists) {
+                for (int i = 0; i < artists.length(); i++) {
+                    JSONObject artist = artists.getJSONObject(i);
+                    String id = artist.optString("id", "");
+                    String name = artist.optString("artist", "");
+                    items.add(buildBrowsableItem("artist/" + id, name, null));
+                }
+            }
+
+            JSONArray albums = result.optJSONArray("albums_loop");
+            if (null!=albums) {
+                for (int i = 0; i < albums.length(); i++) {
+                    JSONObject album = albums.getJSONObject(i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    String artist = album.optString("artist", "");
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    items.add(buildBrowsablePlayableItem("album/" + id, title, artist, artUri));
+                }
+            }
+
+            JSONArray tracks = result.optJSONArray("tracks_loop");
+            if (null!=tracks) {
+                for (int i = 0; i < tracks.length(); i++) {
+                    JSONObject track = tracks.getJSONObject(i);
+                    String id = track.optString("id", "");
+                    String title = track.optString("track", "");
+                    String artist = track.optString("artist", "");
+                    items.add(buildPlayableItem("track/" + id, title, artist, null));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to search", e);
         }
         return items;
     }

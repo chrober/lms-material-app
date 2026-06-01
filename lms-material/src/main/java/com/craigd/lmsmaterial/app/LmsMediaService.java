@@ -177,7 +177,9 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     @Nullable
     @Override
     public BrowserRoot onGetRoot(@NonNull String clientPackageName, int clientUid, @Nullable Bundle rootHints) {
-        return new BrowserRoot(LmsBrowseHelper.ROOT_ID, null);
+        Bundle extras = new Bundle();
+        extras.putBoolean("android.media.browse.SEARCH_SUPPORTED", true);
+        return new BrowserRoot(LmsBrowseHelper.ROOT_ID, extras);
     }
 
     @Override
@@ -185,6 +187,15 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
         result.detach();
         getBrowseExecutor().execute(() -> {
             List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().loadChildren(parentId);
+            result.sendResult(items);
+        });
+    }
+
+    @Override
+    public void onSearch(@NonNull String query, Bundle extras, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
+        result.detach();
+        getBrowseExecutor().execute(() -> {
+            List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().search(query);
             result.sendResult(items);
         });
     }
