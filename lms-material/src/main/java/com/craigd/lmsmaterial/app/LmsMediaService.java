@@ -58,6 +58,7 @@ import com.craigd.lmsmaterial.app.cometd.PlayerStatus;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -186,8 +187,13 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
         result.detach();
         getBrowseExecutor().execute(() -> {
-            List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().loadChildren(parentId);
-            result.sendResult(items);
+            try {
+                List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().loadChildren(parentId);
+                result.sendResult(items);
+            } catch (Exception e) {
+                Utils.error("Failed to load children for: " + parentId, e);
+                result.sendResult(new ArrayList<>());
+            }
         });
     }
 
@@ -195,8 +201,13 @@ public class LmsMediaService extends MediaBrowserServiceCompat {
     public void onSearch(@NonNull String query, Bundle extras, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
         result.detach();
         getBrowseExecutor().execute(() -> {
-            List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().search(query);
-            result.sendResult(items);
+            try {
+                List<MediaBrowserCompat.MediaItem> items = getBrowseHelper().search(query);
+                result.sendResult(items);
+            } catch (Exception e) {
+                Utils.error("Failed to search: " + query, e);
+                result.sendResult(new ArrayList<>());
+            }
         });
     }
 
