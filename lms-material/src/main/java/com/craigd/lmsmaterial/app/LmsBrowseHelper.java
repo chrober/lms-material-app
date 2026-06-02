@@ -20,6 +20,7 @@ import androidx.preference.PreferenceManager;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -338,16 +339,17 @@ public class LmsBrowseHelper {
             }
 
             for (GroupIndex group : index) {
-                String showAllSubtitle = "Show all " + group.count + " artists";
-                items.add(buildBrowsableItemWithGroup(baseId + ":" + group.key, group.key, showAllSubtitle, null, group.key));
-
-                int previewCount = Math.min(GROUP_PREVIEW_COUNT, group.count);
-                for (int i = 0; i < previewCount && (group.offset + i) < loop.length(); i++) {
+                int displayCount = group.count > 40 ? GROUP_PREVIEW_COUNT : group.count;
+                for (int i = 0; i < displayCount && (group.offset + i) < loop.length(); i++) {
                     JSONObject artist = loop.getJSONObject(group.offset + i);
                     String id = artist.optString("id", "");
                     String name = artist.optString("artist", "");
                     Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
-                    items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, group.key));
+                    items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
+                }
+                if (group.count > 40) {
+                    String showAllSubtitle = "Show all " + group.count + " artists";
+                    items.add(buildBrowsableItem(baseId + ":" + group.key, group.key, showAllSubtitle, null));
                 }
             }
         } catch (Exception e) {
@@ -378,11 +380,8 @@ public class LmsBrowseHelper {
             }
 
             for (GroupIndex group : albumsAlphaIndex) {
-                String showAllSubtitle = "Show all " + group.count + " albums";
-                items.add(buildBrowsableItemWithGroup(ALBUMS_ALPHA_ID + ":" + group.key, group.key, showAllSubtitle, null, group.key));
-
-                int previewCount = Math.min(GROUP_PREVIEW_COUNT, group.count);
-                for (int i = 0; i < previewCount && (group.offset + i) < loop.length(); i++) {
+                int displayCount = group.count > 40 ? GROUP_PREVIEW_COUNT : group.count;
+                for (int i = 0; i < displayCount && (group.offset + i) < loop.length(); i++) {
                     JSONObject album = loop.getJSONObject(group.offset + i);
                     String id = album.optString("id", "");
                     String title = album.optString("album", "");
@@ -393,7 +392,11 @@ public class LmsBrowseHelper {
                     }
                     String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                     Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, group.key));
+                    items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                }
+                if (group.count > 40) {
+                    String showAllSubtitle = "Show all " + group.count + " albums";
+                    items.add(buildBrowsableItem(ALBUMS_ALPHA_ID + ":" + group.key, group.key, showAllSubtitle, null));
                 }
             }
         } catch (Exception e) {
@@ -410,7 +413,7 @@ public class LmsBrowseHelper {
             params.add("0");
             params.add(String.valueOf(INDEX_FETCH_LIMIT));
             params.add("sort:yearalbum");
-            params.add("tags:ajlsy");
+            params.add("tags:ly");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
@@ -424,18 +427,16 @@ public class LmsBrowseHelper {
             }
 
             for (GroupIndex group : albumsByYearIndex) {
-                String showAllSubtitle = "Show all " + group.count + " albums";
-                items.add(buildBrowsableItemWithGroup(ALBUMS_BY_YEAR_ID + ":" + group.key, group.key, showAllSubtitle, null, group.key));
-
-                int previewCount = Math.min(GROUP_PREVIEW_COUNT, group.count);
-                for (int i = 0; i < previewCount && (group.offset + i) < loop.length(); i++) {
+                int displayCount = group.count > 40 ? GROUP_PREVIEW_COUNT : group.count;
+                for (int i = 0; i < displayCount && (group.offset + i) < loop.length(); i++) {
                     JSONObject album = loop.getJSONObject(group.offset + i);
                     String id = album.optString("id", "");
                     String title = album.optString("album", "");
-                    String artist = album.optString("artist", "");
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, group.key));
+                    items.add(buildPlayableItem("album/" + id, title, null, null));
+                }
+                if (group.count > 40) {
+                    String showAllSubtitle = "Show all " + group.count + " albums";
+                    items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + group.key, group.key, showAllSubtitle, null));
                 }
             }
         } catch (Exception e) {
@@ -1176,7 +1177,8 @@ public class LmsBrowseHelper {
 
     private String normalizeTextkey(String textkey) {
         if (null==textkey || textkey.isEmpty()) return "#";
-        char c = Character.toUpperCase(textkey.charAt(0));
+        String nfd = Normalizer.normalize(textkey, Normalizer.Form.NFD);
+        char c = Character.toUpperCase(nfd.charAt(0));
         if (c >= '0' && c <= '9') return "123";
         if (c >= 'A' && c <= 'Z') return String.valueOf(c);
         return "#";
