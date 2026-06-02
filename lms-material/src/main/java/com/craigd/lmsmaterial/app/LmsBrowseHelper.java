@@ -51,6 +51,7 @@ public class LmsBrowseHelper {
     private static final int INDEX_FETCH_LIMIT = 25000;
     private static final int SEARCH_LIMIT = 50;
     private static final int TIMEOUT_MS = 15000;
+    private static final int INDEX_TIMEOUT_MS = 45000;
 
     private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY,MORE,YEAR";
 
@@ -321,7 +322,7 @@ public class LmsBrowseHelper {
             if (albumArtistsOnly) params.add("role_id:5");
             params.add("tags:s");
             addLibraryParam(params);
-            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -368,7 +369,7 @@ public class LmsBrowseHelper {
             params.add("sort:album");
             params.add("tags:ajlsy");
             addLibraryParam(params);
-            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -413,9 +414,9 @@ public class LmsBrowseHelper {
             params.add("0");
             params.add(String.valueOf(INDEX_FETCH_LIMIT));
             params.add("sort:yearalbum");
-            params.add("tags:ly");
+            params.add("tags:y");
             addLibraryParam(params);
-            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
