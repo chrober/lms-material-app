@@ -64,7 +64,6 @@ public class LmsBrowseHelper {
     private List<GroupIndex> albumArtistIndex = null;
     private List<GroupIndex> allArtistIndex = null;
     private List<GroupIndex> albumsAlphaIndex = null;
-    private List<GroupIndex> albumsByYearIndex = null;
 
     private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
 
@@ -410,38 +409,26 @@ public class LmsBrowseHelper {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             List<String> params = new ArrayList<>();
-            params.add("albums");
+            params.add("years");
             params.add("0");
-            params.add(String.valueOf(INDEX_FETCH_LIMIT));
-            params.add("sort:yearalbum");
-            params.add("tags:ly");
+            params.add("10000");
+            params.add("hasAlbums:1");
             addLibraryParam(params);
-            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
-            JSONArray loop = result.optJSONArray("albums_loop");
+            JSONArray loop = result.optJSONArray("years_loop");
             if (null==loop) return items;
 
-            if (null==albumsByYearIndex) {
-                albumsByYearIndex = buildYearIndexFromLoop(loop);
-            }
-
-            for (GroupIndex group : albumsByYearIndex) {
-                int displayCount = group.count > 40 ? GROUP_PREVIEW_COUNT : group.count;
-                for (int i = 0; i < displayCount && (group.offset + i) < loop.length(); i++) {
-                    JSONObject album = loop.getJSONObject(group.offset + i);
-                    String id = album.optString("id", "");
-                    String title = album.optString("album", "");
-                    items.add(buildPlayableItem("album/" + id, title, null, null));
-                }
-                if (group.count > 40) {
-                    String showAllSubtitle = "Show all " + group.count + " albums";
-                    items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + group.key, group.key, showAllSubtitle, null));
-                }
+            for (int i = loop.length() - 1; i >= 0; i--) {
+                JSONObject entry = loop.getJSONObject(i);
+                int year = entry.optInt("year", 0);
+                String yearKey = year > 0 ? String.valueOf(year) : "Unknown";
+                items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + yearKey, yearKey, null));
             }
         } catch (Exception e) {
-            Utils.error("Failed to load albums by year grouped", e);
+            Utils.error("Failed to load years", e);
         }
         return items;
     }
@@ -577,19 +564,13 @@ public class LmsBrowseHelper {
         }
 
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        GroupIndex group = findGroup(albumsByYearIndex, yearKey);
-        if (null==group) return items;
-
-        int absoluteOffset = group.offset + pageOffset;
-        int remaining = group.count - pageOffset;
-        int fetchCount = Math.min(PAGE_SIZE, remaining);
-
         try {
             List<String> params = new ArrayList<>();
             params.add("albums");
-            params.add(String.valueOf(absoluteOffset));
-            params.add(String.valueOf(fetchCount));
-            params.add("sort:yearalbum");
+            params.add(String.valueOf(pageOffset));
+            params.add(String.valueOf(PAGE_SIZE));
+            params.add("sort:album");
+            params.add("year:" + ("Unknown".equals(yearKey) ? "0" : yearKey));
             params.add("tags:ajlsy");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
@@ -604,15 +585,20 @@ public class LmsBrowseHelper {
                 String id = album.optString("id", "");
                 String title = album.optString("album", "");
                 String artist = album.optString("artist", "");
+                int year = album.optInt("year", 0);
+                if (shouldShowYear() && year > 0) {
+                    title = title + " (" + year + ")";
+                }
                 String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
                 Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
                 items.add(buildPlayableItem("album/" + id, title, artist, artUri));
             }
 
+            int total = result.optInt("count", 0);
             int nextPageOffset = pageOffset + PAGE_SIZE;
-            if (nextPageOffset < group.count) {
+            if (nextPageOffset < total) {
                 items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + yearKey + "/" + nextPageOffset,
-                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + group.count + ")", null));
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + total + ")", null));
             }
         } catch (Exception e) {
             Utils.error("Failed to load albums by year page", e);
@@ -1173,7 +1159,6 @@ public class LmsBrowseHelper {
         albumArtistIndex = null;
         allArtistIndex = null;
         albumsAlphaIndex = null;
-        albumsByYearIndex = null;
     }
 
     private String normalizeTextkey(String textkey) {
@@ -1216,29 +1201,6 @@ public class LmsBrowseHelper {
             }
         } catch (Exception e) {
             Utils.error("Failed to build letter index", e);
-        }
-        return index;
-    }
-
-    private List<GroupIndex> buildYearIndexFromLoop(JSONArray loop) {
-        List<GroupIndex> index = new ArrayList<>();
-        try {
-            LinkedHashMap<String, int[]> groups = new LinkedHashMap<>();
-            for (int i = 0; i < loop.length(); i++) {
-                JSONObject album = loop.getJSONObject(i);
-                int year = album.optInt("year", 0);
-                String key = year > 0 ? String.valueOf(year) : "Unknown";
-                if (!groups.containsKey(key)) {
-                    groups.put(key, new int[]{i, 0});
-                }
-                groups.get(key)[1]++;
-            }
-
-            for (Map.Entry<String, int[]> entry : groups.entrySet()) {
-                index.add(new GroupIndex(entry.getKey(), entry.getValue()[0], entry.getValue()[1]));
-            }
-        } catch (Exception e) {
-            Utils.error("Failed to build year index", e);
         }
         return index;
     }
