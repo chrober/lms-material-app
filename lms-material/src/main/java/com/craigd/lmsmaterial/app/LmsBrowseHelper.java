@@ -851,7 +851,7 @@ public class LmsBrowseHelper {
 
         if (hasItems) {
             boolean isDefaultIcon = icon.isEmpty() || icon.startsWith("html/images/favorites");
-            Uri iconUri = isDefaultIcon ? drawableUri(R.drawable.ic_folder) : resolveImageUri(icon);
+            Uri iconUri = isDefaultIcon ? drawableUri(R.drawable.ic_folder_favorite) : resolveImageUri(icon);
             return buildBrowsableItem("favorite_folder/" + id, name, iconUri);
         }
 
@@ -1221,11 +1221,11 @@ public class LmsBrowseHelper {
 
     private Uri resolveImageUri(String path) {
         if (null==path || path.isEmpty()) return null;
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            return Uri.parse(path);
+        }
         String serverUrl = rpc.getServerUrl();
         if (null==serverUrl) return null;
-        if (path.startsWith("http://") || path.startsWith("https://")) {
-            return Uri.parse(serverUrl + "/imageproxy/" + Uri.encode(path) + "/image.png");
-        }
         if (!path.startsWith("/")) {
             path = "/" + path;
         }
