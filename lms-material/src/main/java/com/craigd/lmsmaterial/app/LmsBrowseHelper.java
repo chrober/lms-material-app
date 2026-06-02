@@ -850,7 +850,8 @@ public class LmsBrowseHelper {
         String url = item.optString("url", "");
 
         if (hasItems) {
-            return buildBrowsableItem("favorite_folder/" + id, name, resolveImageUri(image));
+            Uri iconUri = image.isEmpty() ? drawableUri(R.drawable.ic_folder) : resolveImageUri(image);
+            return buildBrowsableItem("favorite_folder/" + id, name, iconUri);
         }
 
         if (url.contains("contributor.name")) {
@@ -1222,7 +1223,7 @@ public class LmsBrowseHelper {
         String serverUrl = rpc.getServerUrl();
         if (null==serverUrl) return null;
         if (path.startsWith("http://") || path.startsWith("https://")) {
-            return Uri.parse(path);
+            return Uri.parse(serverUrl + "/imageproxy/" + Uri.encode(path) + "/image.png");
         }
         return Uri.parse(serverUrl + path);
     }
