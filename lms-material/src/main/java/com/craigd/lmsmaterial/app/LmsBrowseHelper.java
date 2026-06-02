@@ -414,7 +414,7 @@ public class LmsBrowseHelper {
             params.add("0");
             params.add(String.valueOf(INDEX_FETCH_LIMIT));
             params.add("sort:yearalbum");
-            params.add("tags:y");
+            params.add("tags:ly");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
             if (null==resp) return items;
