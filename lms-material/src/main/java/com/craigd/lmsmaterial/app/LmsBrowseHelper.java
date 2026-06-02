@@ -845,12 +845,13 @@ public class LmsBrowseHelper {
     private MediaBrowserCompat.MediaItem buildFavoriteMediaItem(JSONObject item) {
         String id = item.optString("id", "");
         String name = item.optString("name", "");
-        String image = item.optString("image", item.optString("icon", ""));
+        String icon = item.optString("icon", item.optString("icon-id", item.optString("image", "")));
         boolean hasItems = item.optInt("hasitems", 0) > 0;
         String url = item.optString("url", "");
 
         if (hasItems) {
-            Uri iconUri = image.isEmpty() ? drawableUri(R.drawable.ic_folder) : resolveImageUri(image);
+            boolean isDefaultIcon = icon.isEmpty() || icon.startsWith("html/images/favorites");
+            Uri iconUri = isDefaultIcon ? drawableUri(R.drawable.ic_folder) : resolveImageUri(icon);
             return buildBrowsableItem("favorite_folder/" + id, name, iconUri);
         }
 
@@ -865,11 +866,11 @@ public class LmsBrowseHelper {
         if (url.contains("album.title")) {
             String albumId = lookupAlbumIdByName(name);
             if (null!=albumId) {
-                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(image));
+                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(icon));
             }
         }
 
-        return buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image));
+        return buildPlayableItem("favorite/" + id, name, null, resolveImageUri(icon));
     }
 
     private String lookupArtistIdByName(String name) {
@@ -1224,6 +1225,9 @@ public class LmsBrowseHelper {
         if (null==serverUrl) return null;
         if (path.startsWith("http://") || path.startsWith("https://")) {
             return Uri.parse(serverUrl + "/imageproxy/" + Uri.encode(path) + "/image.png");
+        }
+        if (!path.startsWith("/")) {
+            path = "/" + path;
         }
         return Uri.parse(serverUrl + path);
     }
