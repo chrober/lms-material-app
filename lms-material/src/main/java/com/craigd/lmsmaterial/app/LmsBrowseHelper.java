@@ -845,13 +845,13 @@ public class LmsBrowseHelper {
     private MediaBrowserCompat.MediaItem buildFavoriteMediaItem(JSONObject item) {
         String id = item.optString("id", "");
         String name = item.optString("name", "");
-        String icon = item.optString("icon", item.optString("icon-id", item.optString("image", "")));
+        String image = item.optString("image", item.optString("icon", item.optString("icon-id", "")));
         boolean hasItems = item.optInt("hasitems", 0) > 0;
         String url = item.optString("url", "");
 
         if (hasItems) {
-            boolean isDefaultIcon = icon.isEmpty() || icon.startsWith("html/images/favorites");
-            Uri iconUri = isDefaultIcon ? drawableUri(R.drawable.ic_folder_favorite) : resolveImageUri(icon);
+            boolean isDefaultIcon = image.isEmpty() || image.startsWith("html/images/favorites");
+            Uri iconUri = isDefaultIcon ? drawableUri(R.drawable.ic_folder_favorite) : resolveImageUri(image);
             return buildBrowsableItem("favorite_folder/" + id, name, iconUri);
         }
 
@@ -866,11 +866,11 @@ public class LmsBrowseHelper {
         if (url.contains("album.title")) {
             String albumId = lookupAlbumIdByName(name);
             if (null!=albumId) {
-                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(icon));
+                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(image));
             }
         }
 
-        return buildPlayableItem("favorite/" + id, name, null, resolveImageUri(icon));
+        return buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image));
     }
 
     private String lookupArtistIdByName(String name) {
@@ -1228,6 +1228,17 @@ public class LmsBrowseHelper {
         if (null==serverUrl) return null;
         if (!path.startsWith("/")) {
             path = "/" + path;
+        }
+        if (path.startsWith("/imageproxy/")) {
+            String encoded = path.substring("/imageproxy/".length());
+            int imgSuffix = encoded.lastIndexOf("/image");
+            if (imgSuffix > 0) {
+                encoded = encoded.substring(0, imgSuffix);
+            }
+            String decoded = Uri.decode(encoded);
+            if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+                return Uri.parse(decoded);
+            }
         }
         return Uri.parse(serverUrl + path);
     }
