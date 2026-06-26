@@ -187,10 +187,10 @@ public abstract class ServerDiscovery {
                 socket.setReuseAddress(true);
                 socket.setBroadcast(true);
                 socket.setSoTimeout(SERVER_DISCOVERY_TIMEOUT);
-                if (network != null) {
+                if (null!=network) {
                     network.bindSocket(socket);
                 }
-                socket.bind(localAddr != null ? new InetSocketAddress(localAddr, 0) : new InetSocketAddress(0));
+                socket.bind(null!=localAddr ? new InetSocketAddress(localAddr, 0) : new InetSocketAddress(0));
                 Utils.debug("Discover via " + label + " -> " + broadcastAddr.getHostAddress());
                 DatagramPacket reqPkt = new DatagramPacket(req, req.length, broadcastAddr, 3483);
                 socket.send(reqPkt);
@@ -199,7 +199,7 @@ public abstract class ServerDiscovery {
                 for (;;) {
                     try {
                         socket.receive(respPkt);
-                        if (resp[0] == (byte)'E') {
+                        if (resp[0]==(byte)'E') {
                             Server server = new Server(respPkt);
                             if (!servers.contains(server)) {
                                 servers.add(server);
@@ -215,7 +215,7 @@ public abstract class ServerDiscovery {
             } catch (Exception e) {
                 Utils.debug("Discovery failed via " + label + ": " + e.getMessage());
             } finally {
-                if (socket != null) {
+                if (null!=socket) {
                     socket.close();
                 }
             }
@@ -249,19 +249,19 @@ public abstract class ServerDiscovery {
                 return null;
             }
             int ip = inet4ToInt(address);
-            int mask = prefixLength == 0 ? 0 : (-1 << (32 - prefixLength));
+            int mask = prefixLength==0 ? 0 : (-1 << (32 - prefixLength));
             return intToInet4(ip | ~mask);
         }
 
         private boolean isDiscoveryNetwork(NetworkCapabilities capabilities) {
-            return capabilities != null &&
+            return null!=capabilities &&
                     (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                      capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
         }
 
         private List<DiscoveryTarget> getConnectivityTargets() {
             List<DiscoveryTarget> targets = new ArrayList<>();
-            if (connectivityManager == null) {
+            if (null==connectivityManager) {
                 return targets;
             }
             for (Network network : connectivityManager.getAllNetworks()) {
@@ -270,15 +270,15 @@ public abstract class ServerDiscovery {
                     continue;
                 }
                 LinkProperties linkProperties = connectivityManager.getLinkProperties(network);
-                if (linkProperties == null) {
+                if (null==linkProperties) {
                     continue;
                 }
                 String ifaceName = linkProperties.getInterfaceName();
                 for (LinkAddress linkAddress : linkProperties.getLinkAddresses()) {
                     InetAddress localAddr = linkAddress.getAddress();
                     InetAddress broadcastAddr = getBroadcastAddress(localAddr, linkAddress.getPrefixLength());
-                    if (broadcastAddr != null && !localAddr.isLoopbackAddress()) {
-                        String label = (ifaceName == null ? "network" : ifaceName) + "/" + localAddr.getHostAddress();
+                    if (null!=broadcastAddr && !localAddr.isLoopbackAddress()) {
+                        String label = (null==ifaceName ? "network" : ifaceName) + "/" + localAddr.getHostAddress();
                         targets.add(new DiscoveryTarget(network, localAddr, broadcastAddr, linkAddress.getPrefixLength(), label));
                         try {
                             targets.add(new DiscoveryTarget(network, localAddr, InetAddress.getByName("255.255.255.255"), linkAddress.getPrefixLength(), label + "/global"));
@@ -299,7 +299,7 @@ public abstract class ServerDiscovery {
                     continue;
                 }
                 int prefixLength = Math.max(target.prefixLength, 24);
-                int mask = prefixLength == 0 ? 0 : (-1 << (32 - prefixLength));
+                int mask = prefixLength==0 ? 0 : (-1 << (32 - prefixLength));
                 int local = inet4ToInt(target.localAddr);
                 int network = local & mask;
                 int broadcast = network | ~mask;
@@ -314,7 +314,7 @@ public abstract class ServerDiscovery {
                         continue;
                     }
                     InetAddress hostAddr = intToInet4((int) host);
-                    if (hostAddr != null && scannedHosts.add(target.network + "/" + hostAddr.getHostAddress())) {
+                    if (null!=hostAddr && scannedHosts.add(target.network + "/" + hostAddr.getHostAddress())) {
                         targets.add(new ProbeTarget(target.network, hostAddr));
                     }
                 }
@@ -338,7 +338,7 @@ public abstract class ServerDiscovery {
             HttpURLConnection connection = null;
             try {
                 URL url = new URL("http://" + target.address.getHostAddress() + ":" + Server.DEFAULT_PORT + "/jsonrpc.js");
-                connection = (HttpURLConnection) (target.network != null ? target.network.openConnection(url) : url.openConnection());
+                connection = (HttpURLConnection) (null!=target.network ? target.network.openConnection(url) : url.openConnection());
                 connection.setRequestMethod("POST");
                 connection.setConnectTimeout(HTTP_PROBE_CONNECT_TIMEOUT);
                 connection.setReadTimeout(HTTP_PROBE_READ_TIMEOUT);
@@ -349,18 +349,18 @@ public abstract class ServerDiscovery {
                 try (OutputStream outputStream = connection.getOutputStream()) {
                     outputStream.write(body);
                 }
-                if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                if (connection.getResponseCode()==HttpURLConnection.HTTP_OK) {
                     JSONObject json = new JSONObject(readResponse(connection.getInputStream()));
                     if (json.has("result")) {
                         JSONObject result = json.optJSONObject("result");
-                        String name = result == null ? "" : result.optString("server_name", "");
+                        String name = null==result ? "" : result.optString("server_name", "");
                         Utils.debug("Discovered LMS HTTP server " + target.address.getHostAddress());
                         return new Server(target.address.getHostAddress(), Server.DEFAULT_PORT, name);
                     }
                 }
             } catch (Exception ignored) {
             } finally {
-                if (connection != null) {
+                if (null!=connection) {
                     connection.disconnect();
                 }
             }
@@ -381,7 +381,7 @@ public abstract class ServerDiscovery {
                 }
                 for (int i = 0; i < targets.size(); i++) {
                     Server server = completionService.take().get();
-                    if (server != null && !servers.contains(server)) {
+                    if (null!=server && !servers.contains(server)) {
                         servers.add(server);
                         if (!discoverAll) {
                             return true;
@@ -453,7 +453,7 @@ public abstract class ServerDiscovery {
                     List<InterfaceAddress> candidates = new ArrayList<>();
                     try {
                         Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
-                        if (ifaces != null) {
+                        if (null!=ifaces) {
                             while (ifaces.hasMoreElements()) {
                                 NetworkInterface iface = ifaces.nextElement();
                                 if (!iface.isLoopback() && iface.isUp()) {
