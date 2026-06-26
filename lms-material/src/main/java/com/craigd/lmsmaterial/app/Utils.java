@@ -21,6 +21,10 @@ import android.database.Cursor;
 import android.graphics.Insets;
 import android.graphics.Rect;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
@@ -51,8 +55,32 @@ public class Utils {
 
     public static boolean isNetworkConnected(Context context) {
         ConnectivityManager connectivityManager = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (null==connectivityManager) {
+            return false;
+        }
         NetworkInfo info = connectivityManager.getActiveNetworkInfo();
-        return null!=info && info.isConnected();
+        if (null!=info && info.isConnected()) {
+            return true;
+        }
+        try {
+            for (Network network : connectivityManager.getAllNetworks()) {
+                NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(network);
+                if (null==caps || (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+                    continue;
+                }
+                LinkProperties props = connectivityManager.getLinkProperties(network);
+                if (null==props) {
+                    continue;
+                }
+                for (LinkAddress address : props.getLinkAddresses()) {
+                    if (null!=address.getAddress() && !address.getAddress().isLoopbackAddress()) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     public static float convertPixelsToDp(float px, Context context){
