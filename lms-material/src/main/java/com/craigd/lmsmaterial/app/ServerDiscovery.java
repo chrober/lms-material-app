@@ -8,6 +8,11 @@
 package com.craigd.lmsmaterial.app;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -18,20 +23,36 @@ import androidx.annotation.NonNull;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.HttpURLConnection;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public abstract class ServerDiscovery {
     private static final int SERVER_DISCOVERY_TIMEOUT = 1500;
+    private static final int HTTP_PROBE_CONNECT_TIMEOUT = 300;
+    private static final int HTTP_PROBE_READ_TIMEOUT = 500;
 
     public static class Server implements Comparable<Server> {
         public static final int DEFAULT_PORT = 9000;
@@ -150,19 +171,27 @@ public abstract class ServerDiscovery {
     class DiscoveryRunnable implements Runnable {
         private volatile boolean active = false;
         private final WifiManager wifiManager;
+        private final ConnectivityManager connectivityManager;
         private final List<Server> servers = new LinkedList<>();
 
-        DiscoveryRunnable(WifiManager wifiManager) {
+        DiscoveryRunnable(WifiManager wifiManager, ConnectivityManager connectivityManager) {
             this.wifiManager = wifiManager;
+            this.connectivityManager = connectivityManager;
         }
 
         // Returns true if a server was found and discoverAll is false (caller should stop).
-        private boolean discoverOnInterface(InetAddress localAddr, InetAddress broadcastAddr, byte[] req) {
+        private boolean discoverOnInterface(Network network, InetAddress localAddr, InetAddress broadcastAddr, byte[] req, String label) {
             DatagramSocket socket = null;
             try {
-                socket = localAddr != null ? new DatagramSocket(0, localAddr) : new DatagramSocket();
+                socket = new DatagramSocket(null);
+                socket.setReuseAddress(true);
                 socket.setBroadcast(true);
                 socket.setSoTimeout(SERVER_DISCOVERY_TIMEOUT);
+                if (network != null) {
+                    network.bindSocket(socket);
+                }
+                socket.bind(localAddr != null ? new InetSocketAddress(localAddr, 0) : new InetSocketAddress(0));
+                Utils.debug("Discover via " + label + " -> " + broadcastAddr.getHostAddress());
                 DatagramPacket reqPkt = new DatagramPacket(req, req.length, broadcastAddr, 3483);
                 socket.send(reqPkt);
                 byte[] resp = new byte[256];
@@ -183,13 +212,213 @@ public abstract class ServerDiscovery {
                         break;
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                Utils.debug("Discovery failed via " + label + ": " + e.getMessage());
             } finally {
                 if (socket != null) {
                     socket.close();
                 }
             }
             return false;
+        }
+
+        private int inet4ToInt(InetAddress address) {
+            byte[] bytes = address.getAddress();
+            return ((bytes[0] & 0xff) << 24) |
+                   ((bytes[1] & 0xff) << 16) |
+                   ((bytes[2] & 0xff) << 8) |
+                   (bytes[3] & 0xff);
+        }
+
+        private InetAddress intToInet4(int value) {
+            byte[] bytes = {
+                    (byte) ((value >> 24) & 0xff),
+                    (byte) ((value >> 16) & 0xff),
+                    (byte) ((value >> 8) & 0xff),
+                    (byte) (value & 0xff)
+            };
+            try {
+                return InetAddress.getByAddress(bytes);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+
+        private InetAddress getBroadcastAddress(InetAddress address, int prefixLength) {
+            if (!(address instanceof Inet4Address) || prefixLength < 0 || prefixLength > 30) {
+                return null;
+            }
+            int ip = inet4ToInt(address);
+            int mask = prefixLength == 0 ? 0 : (-1 << (32 - prefixLength));
+            return intToInet4(ip | ~mask);
+        }
+
+        private boolean isDiscoveryNetwork(NetworkCapabilities capabilities) {
+            return capabilities != null &&
+                    (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                     capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
+        }
+
+        private List<DiscoveryTarget> getConnectivityTargets() {
+            List<DiscoveryTarget> targets = new ArrayList<>();
+            if (connectivityManager == null) {
+                return targets;
+            }
+            for (Network network : connectivityManager.getAllNetworks()) {
+                NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+                if (!isDiscoveryNetwork(capabilities)) {
+                    continue;
+                }
+                LinkProperties linkProperties = connectivityManager.getLinkProperties(network);
+                if (linkProperties == null) {
+                    continue;
+                }
+                String ifaceName = linkProperties.getInterfaceName();
+                for (LinkAddress linkAddress : linkProperties.getLinkAddresses()) {
+                    InetAddress localAddr = linkAddress.getAddress();
+                    InetAddress broadcastAddr = getBroadcastAddress(localAddr, linkAddress.getPrefixLength());
+                    if (broadcastAddr != null && !localAddr.isLoopbackAddress()) {
+                        String label = (ifaceName == null ? "network" : ifaceName) + "/" + localAddr.getHostAddress();
+                        targets.add(new DiscoveryTarget(network, localAddr, broadcastAddr, linkAddress.getPrefixLength(), label));
+                        try {
+                            targets.add(new DiscoveryTarget(network, localAddr, InetAddress.getByName("255.255.255.255"), linkAddress.getPrefixLength(), label + "/global"));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+            }
+            return targets;
+        }
+
+        private List<ProbeTarget> getProbeTargets(List<DiscoveryTarget> discoveryTargets) {
+            List<ProbeTarget> targets = new ArrayList<>();
+            Set<String> scannedSubnets = new HashSet<>();
+            Set<String> scannedHosts = new HashSet<>();
+            for (DiscoveryTarget target : discoveryTargets) {
+                if (!(target.localAddr instanceof Inet4Address) || target.prefixLength < 0 || target.prefixLength > 30) {
+                    continue;
+                }
+                int prefixLength = Math.max(target.prefixLength, 24);
+                int mask = prefixLength == 0 ? 0 : (-1 << (32 - prefixLength));
+                int local = inet4ToInt(target.localAddr);
+                int network = local & mask;
+                int broadcast = network | ~mask;
+                String subnetKey = target.network + "/" + network + "/" + prefixLength;
+                if (!scannedSubnets.add(subnetKey)) {
+                    continue;
+                }
+                long first = (network & 0xffffffffL) + 1;
+                long last = (broadcast & 0xffffffffL) - 1;
+                for (long host = first; host <= last; host++) {
+                    if ((int) host == local) {
+                        continue;
+                    }
+                    InetAddress hostAddr = intToInet4((int) host);
+                    if (hostAddr != null && scannedHosts.add(target.network + "/" + hostAddr.getHostAddress())) {
+                        targets.add(new ProbeTarget(target.network, hostAddr));
+                    }
+                }
+            }
+            return targets;
+        }
+
+        private String readResponse(InputStream inputStream) throws IOException {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            int total = 0;
+            int len;
+            while ((len = inputStream.read(buffer)) != -1 && total < 65536) {
+                outputStream.write(buffer, 0, len);
+                total += len;
+            }
+            return outputStream.toString("UTF-8");
+        }
+
+        private Server probeHttpServer(ProbeTarget target) {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL("http://" + target.address.getHostAddress() + ":" + Server.DEFAULT_PORT + "/jsonrpc.js");
+                connection = (HttpURLConnection) (target.network != null ? target.network.openConnection(url) : url.openConnection());
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(HTTP_PROBE_CONNECT_TIMEOUT);
+                connection.setReadTimeout(HTTP_PROBE_READ_TIMEOUT);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json");
+                byte[] body = "{\"id\":1,\"method\":\"slim.request\",\"params\":[\"\",[\"serverstatus\",\"0\",\"1\"]]}".getBytes(StandardCharsets.UTF_8);
+                connection.setFixedLengthStreamingMode(body.length);
+                try (OutputStream outputStream = connection.getOutputStream()) {
+                    outputStream.write(body);
+                }
+                if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                    JSONObject json = new JSONObject(readResponse(connection.getInputStream()));
+                    if (json.has("result")) {
+                        JSONObject result = json.optJSONObject("result");
+                        String name = result == null ? "" : result.optString("server_name", "");
+                        Utils.debug("Discovered LMS HTTP server " + target.address.getHostAddress());
+                        return new Server(target.address.getHostAddress(), Server.DEFAULT_PORT, name);
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+            return null;
+        }
+
+        private boolean probeSubnets(List<DiscoveryTarget> discoveryTargets) {
+            List<ProbeTarget> targets = getProbeTargets(discoveryTargets);
+            if (targets.isEmpty()) {
+                return false;
+            }
+            Utils.debug("Probe " + targets.size() + " local addresses for LMS HTTP");
+            ExecutorService executor = Executors.newFixedThreadPool(Math.min(24, targets.size()));
+            CompletionService<Server> completionService = new ExecutorCompletionService<>(executor);
+            try {
+                for (ProbeTarget target : targets) {
+                    completionService.submit(() -> probeHttpServer(target));
+                }
+                for (int i = 0; i < targets.size(); i++) {
+                    Server server = completionService.take().get();
+                    if (server != null && !servers.contains(server)) {
+                        servers.add(server);
+                        if (!discoverAll) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                executor.shutdownNow();
+            }
+            return false;
+        }
+
+        private class DiscoveryTarget {
+            final Network network;
+            final InetAddress localAddr;
+            final InetAddress broadcastAddr;
+            final int prefixLength;
+            final String label;
+
+            DiscoveryTarget(Network network, InetAddress localAddr, InetAddress broadcastAddr, int prefixLength, String label) {
+                this.network = network;
+                this.localAddr = localAddr;
+                this.broadcastAddr = broadcastAddr;
+                this.prefixLength = prefixLength;
+                this.label = label;
+            }
+        }
+
+        private class ProbeTarget {
+            final Network network;
+            final InetAddress address;
+
+            ProbeTarget(Network network, InetAddress address) {
+                this.network = network;
+                this.address = address;
+            }
         }
 
         @Override
@@ -203,33 +432,52 @@ public abstract class ServerDiscovery {
             try {
                 byte[] req = { 'e', 'I', 'P', 'A', 'D', 0, 'N', 'A', 'M', 'E', 0, 'J', 'S', 'O', 'N', 0 };
 
-                // Collect broadcast addresses from all active non-loopback interfaces.
-                // This ensures discovery works on the WiFi hotspot interface (ap0/wlan1)
-                // in addition to the regular WiFi client interface.
-                List<InterfaceAddress> candidates = new ArrayList<>();
-                try {
-                    Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
-                    if (ifaces != null) {
-                        while (ifaces.hasMoreElements()) {
-                            NetworkInterface iface = ifaces.nextElement();
-                            if (!iface.isLoopback() && iface.isUp()) {
-                                for (InterfaceAddress addr : iface.getInterfaceAddresses()) {
-                                    if (addr.getBroadcast() != null) {
-                                        candidates.add(addr);
+                // Android hotspot is exposed as a non-default local Network while mobile data
+                // remains the default Network. Bind the UDP socket to each local WiFi/Ethernet
+                // Network so hotspot broadcasts are routed over the tethering interface.
+                boolean stopDiscovery = false;
+                List<DiscoveryTarget> connectivityTargets = getConnectivityTargets();
+                for (DiscoveryTarget target : connectivityTargets) {
+                    if (discoverOnInterface(target.network, target.localAddr, target.broadcastAddr, req, target.label)) {
+                        stopDiscovery = true;
+                        break;
+                    }
+                }
+                if (!stopDiscovery) {
+                    stopDiscovery = probeSubnets(connectivityTargets);
+                }
+
+                // Fall back to broadcast addresses from all active non-loopback interfaces for
+                // devices that do not expose the local link through ConnectivityManager.
+                if (!stopDiscovery) {
+                    List<InterfaceAddress> candidates = new ArrayList<>();
+                    try {
+                        Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
+                        if (ifaces != null) {
+                            while (ifaces.hasMoreElements()) {
+                                NetworkInterface iface = ifaces.nextElement();
+                                if (!iface.isLoopback() && iface.isUp()) {
+                                    for (InterfaceAddress addr : iface.getInterfaceAddresses()) {
+                                        if (addr.getBroadcast() != null) {
+                                            candidates.add(addr);
+                                        }
                                     }
                                 }
                             }
                         }
+                    } catch (Exception ignored) {
                     }
-                } catch (Exception ignored) {
-                }
 
-                if (candidates.isEmpty()) {
-                    discoverOnInterface(null, InetAddress.getByName("255.255.255.255"), req);
-                } else {
-                    for (InterfaceAddress addr : candidates) {
-                        if (discoverOnInterface(addr.getAddress(), addr.getBroadcast(), req)) {
-                            break;
+                    if (candidates.isEmpty()) {
+                        discoverOnInterface(null, null, InetAddress.getByName("255.255.255.255"), req, "global");
+                    } else {
+                        for (InterfaceAddress addr : candidates) {
+                            if (discoverOnInterface(null, addr.getAddress(), addr.getBroadcast(), req, addr.getAddress().getHostAddress())) {
+                                break;
+                            }
+                        }
+                        if (servers.isEmpty() || discoverAll) {
+                            discoverOnInterface(null, null, InetAddress.getByName("255.255.255.255"), req, "global");
                         }
                     }
                 }
@@ -269,7 +517,9 @@ public abstract class ServerDiscovery {
         if (runnable!=null && runnable.isActive()) {
             return;
         }
-        runnable = new DiscoveryRunnable((WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE));
+        runnable = new DiscoveryRunnable(
+                (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE),
+                (ConnectivityManager) context.getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE));
         Thread thread = new Thread(runnable);
         thread.start();
     }
