@@ -23,6 +23,8 @@ public class LocalPlayer {
     public static final String SB_PLAYER_PKG = "com.angrygoat.android.sbplayer";
     public static final String SQUEEZE_PLAYER_PKG = "de.bluegaspode.squeezeplayer";
     public static final String SQUEEZELITE_PKG = "org.lyrion.squeezelite";
+    public static final String SQUEEZELITE_CHROBER_PKG = "org.lyrion.squeezelite.chrober";
+    private static final String SQUEEZELITE_SERVICE_CLASS = "org.lyrion.squeezelite.PlayerService";
     private final SharedPreferences sharedPreferences;
     private final Context context;
     private JsonRpc rpc = null;
@@ -158,12 +160,14 @@ public class LocalPlayer {
     }
 
     private boolean controlSqueezelite(boolean start) {
-        if (!Utils.isInstalled(context, SQUEEZELITE_PKG, "Squeezelite")) {
+        String pkg = getSqueezelitePackage(context);
+        if (pkg == null) {
+            Utils.showPlayerControlFailed(context, "Squeezelite");
             return false;
         }
         try {
             Intent intent = new Intent();
-            intent.setClassName(SQUEEZELITE_PKG, SQUEEZELITE_PKG+".PlayerService");
+            intent.setClassName(pkg, SQUEEZELITE_SERVICE_CLASS);
             if (start) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent);
@@ -178,5 +182,23 @@ public class LocalPlayer {
             Utils.error("Failed to control Squeezelite - " + e.getMessage());
             return false;
         }
+    }
+
+    public static boolean isSqueezeliteInstalled(Context context) {
+        if (getSqueezelitePackage(context) != null) {
+            return true;
+        }
+        Utils.showPlayerControlFailed(context, "Squeezelite");
+        return false;
+    }
+
+    private static String getSqueezelitePackage(Context context) {
+        if (Utils.hasLaunchIntent(context, SQUEEZELITE_CHROBER_PKG)) {
+            return SQUEEZELITE_CHROBER_PKG;
+        }
+        if (Utils.hasLaunchIntent(context, SQUEEZELITE_PKG)) {
+            return SQUEEZELITE_PKG;
+        }
+        return null;
     }
 }

@@ -379,7 +379,7 @@ public class SettingsActivity extends AppCompatActivity {
                 String val = sharedPreferences.getString(key, null);
                 if ( (LocalPlayer.SB_PLAYER.equals(val) && !Utils.isInstalled(activity, LocalPlayer.SB_PLAYER_PKG, "SB Player")) ||
                      (LocalPlayer.SQUEEZE_PLAYER.equals(val) && !Utils.isInstalled(activity, LocalPlayer.SQUEEZE_PLAYER_PKG, "SqueezePlayer")) ||
-                     (LocalPlayer.SQUEEZELITE.equals(val) && !Utils.isInstalled(activity, LocalPlayer.SQUEEZELITE_PKG, "Squeezelite"))) {
+                     (LocalPlayer.SQUEEZELITE.equals(val) && !LocalPlayer.isSqueezeliteInstalled(activity))) {
                     resetLocalPlayer();
                 } else {
                     updateListSummary(key);

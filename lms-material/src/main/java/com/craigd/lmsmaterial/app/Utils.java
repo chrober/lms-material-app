@@ -235,15 +235,23 @@ public class Utils {
     }
 
     public static boolean isInstalled(Context context, String pkg, String name) {
-        final PackageManager packageManager = context.getPackageManager();
-        Intent intent = packageManager.getLaunchIntentForPackage(pkg);
-        if (intent != null) {
+        if (hasLaunchIntent(context, pkg)) {
             return true;
         } else {
-            String text = context.getApplicationContext().getResources().getString(R.string.player_control_failed).replace("%1", name);
-            StyleableToast.makeText(context.getApplicationContext(), text, Toast.LENGTH_SHORT, R.style.toast).show();
+            showPlayerControlFailed(context, name);
             return false;
         }
+    }
+
+    public static boolean hasLaunchIntent(Context context, String pkg) {
+        final PackageManager packageManager = context.getPackageManager();
+        Intent intent = packageManager.getLaunchIntentForPackage(pkg);
+        return intent != null;
+    }
+
+    public static void showPlayerControlFailed(Context context, String name) {
+        String text = context.getApplicationContext().getResources().getString(R.string.player_control_failed).replace("%1", name);
+        StyleableToast.makeText(context.getApplicationContext(), text, Toast.LENGTH_SHORT, R.style.toast).show();
     }
 
     public static File saveToCache(Context context, String dirname, String name, byte[] data) {
