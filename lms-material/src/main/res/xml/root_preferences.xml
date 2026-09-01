@@ -50,6 +50,12 @@
             app:summary="@string/fullscreen_summary"
             app:title="@string/fullscreen" />
         <ListPreference
+            android:entries="@array/notifSize"
+            android:entryValues="@array/notifSizeAlias"
+            android:key="notif_size"
+            android:title="@string/notif_size"
+            app:iconSpaceReserved="false" />
+        <ListPreference
             android:entries="@array/orientation"
             android:entryValues="@array/orientationAlias"
             android:key="orientation"
@@ -95,16 +101,6 @@
             android:key="notifs"
             android:title="@string/notifications"
             app:iconSpaceReserved="false" />
-    </PreferenceCategory>
-
-    <PreferenceCategory
-        app:iconSpaceReserved="false"
-        app:title="@string/downloading">
-        <SwitchPreferenceCompat
-            app:iconSpaceReserved="false"
-            app:key="transcode"
-            app:summary="@string/transcode_summary"
-            app:title="@string/transcode" />
     </PreferenceCategory>
 
     <PreferenceCategory
