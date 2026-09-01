@@ -30,7 +30,6 @@ import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -38,7 +37,6 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
 import android.os.SystemClock;
-import android.provider.Settings;
 import android.util.Base64;
 import android.view.KeyEvent;
 import android.view.View;
@@ -71,8 +69,6 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.preference.PreferenceManager;
 
-import org.json.JSONArray;
-
 import java.io.File;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
@@ -103,7 +99,6 @@ public class MainActivity extends AppCompatActivity {
     private static final int PAGE_TIMEOUT = 5000; // ms
     private static final int DISCONNECT_TIMEOUT = 6; // seconds
     private static final int DISCONNECT_TIMEOUT_WITHOUT_NETWORK = 10; // seconds
-    private static final int STORAGE_ACCESS_REQUEST_CODE = 123;
 
     private SharedPreferences sharedPreferences;
     private WebView webView;
@@ -119,7 +114,6 @@ public class MainActivity extends AppCompatActivity {
     private String notifications = null;
     private boolean showOverLockscreen = false;
     private UrlHandler urlHander;
-    private JSONArray downloadData = null;
     public static boolean isDark = true;
     private boolean pageLoaded = false;
     private long recreateTime = 0;
@@ -156,54 +150,6 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    private Messenger downloadServiceMessenger = null;
-    private BroadcastReceiver downloadStatusReceiver = null;
-    private final ServiceConnection downloadServiceConnection = new ServiceConnection() {
-        public void onServiceConnected(ComponentName className, IBinder service) {
-            Utils.debug("Setup download messenger");
-            downloadServiceMessenger = new Messenger(service);
-            downloadStatusReceiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    Utils.debug("Download status received: " + intent.getStringExtra(DownloadService.STATUS_BODY));
-                    String msg  = intent.getStringExtra(DownloadService.STATUS_BODY);
-                    if (null==msg) {
-                        return;
-                    }
-                    msg = msg.replace("\n", "")
-                            .replace("\\\"", "\\\\\"")
-                            .replace("\"", "\\\"");
-                    webView.evaluateJavascript("downloadStatus(\"" + msg +"\")", null);
-
-                    if (0==intent.getIntExtra(DownloadService.STATUS_LEN, -1)) {
-                        try {
-                            unbindService(downloadServiceConnection);
-                        } catch (Exception e) {
-                            Utils.error("Failed to unbind download service");
-                        }
-                        downloadServiceMessenger = null;
-                    }
-                }
-            };
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(downloadStatusReceiver, new IntentFilter(DownloadService.STATUS), RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(downloadStatusReceiver, new IntentFilter(DownloadService.STATUS));
-            }
-            if (null != downloadData) {
-                startDownload(downloadData);
-            }
-        }
-
-        public void onServiceDisconnected(ComponentName className) {
-            Utils.debug("onServiceDisconnected:" + className.getClassName());
-            downloadServiceMessenger = null;
-            unregisterReceiver(downloadStatusReceiver);
-            downloadStatusReceiver = null;
-        }
-    };
-
     private class Discovery extends ServerDiscovery {
         Discovery(Context context) {
             super(context, false);
@@ -222,7 +168,7 @@ public class MainActivity extends AppCompatActivity {
                 editor.apply();
                 String prevUrl = url;
                 url = getConfiguredUrl();
-                if (!url.equals(prevUrl)) {
+                if (null!=url && !url.equals(prevUrl)) {
                     StyleableToast.makeText(context, getResources().getString(R.string.server_discovered) + "\n\n" + servers.get(0).describe(), Toast.LENGTH_SHORT, R.style.toast).show();
                     Utils.info("URL:" + url);
                     pageError = false;
@@ -313,18 +259,15 @@ public class MainActivity extends AppCompatActivity {
             if (sharedPreferences.getBoolean(SettingsActivity.PLAYER_START_MENU_ITEM_PREF_KEY, false)) {
                 builder.appendQueryParameter("nativePlayerPower", "1");
             }
-            if (Utils.notificationAllowed(this, DownloadService.NOTIFICATION_CHANNEL_ID)) {
-                builder.appendQueryParameter("download", "native");
-            }
             if (!sharedPreferences.getBoolean(SettingsActivity.FULLSCREEN_PREF_KEY, false) &&
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                int scale = sharedPreferences.getInt(SettingsActivity.SCALE_PREF_KEY,0);
-                double adjust = 1.0;
-                if (scale<5) {
-                    adjust += (5-scale)/10.0;
+                int factor = getScaleFactor();
+                double adjust = factor==100 ? 1.0 : (100.0d / factor);
+                int notifAreaSize = Utils.parseInt(sharedPreferences.getString(SettingsActivity.NOTIF_SIZE_PREF_KEY, "0"), 0);
+                if (notifAreaSize<20) {
+                    notifAreaSize = Utils.getTopPadding(this);
                 }
-                Utils.cutoutTopLeft(this);
-                builder.appendQueryParameter("topPad", ""+(int) Math.ceil(Utils.getTopPadding(this)*adjust));
+                builder.appendQueryParameter("topPad", ""+(int)(notifAreaSize*adjust));
                 builder.appendQueryParameter("botPad", ""+(int)Math.ceil(Utils.getBottomPadding(this)*adjust));
                 if (!Utils.usingGestureNavigation(this)) {
                     builder.appendQueryParameter("dlgPad", ""+(int)Math.ceil(48*adjust));
@@ -373,6 +316,10 @@ public class MainActivity extends AppCompatActivity {
         if (!sharedPreferences.contains(SettingsActivity.FULLSCREEN_PREF_KEY) ||
                 (sharedPreferences.getBoolean(SettingsActivity.FULLSCREEN_PREF_KEY, false) && Utils.cutoutTopLeft(this))) {
             editor.putBoolean(SettingsActivity.FULLSCREEN_PREF_KEY, false);
+            modified=true;
+        }
+        if (!sharedPreferences.contains(SettingsActivity.NOTIF_SIZE_PREF_KEY)) {
+            editor.putString(SettingsActivity.NOTIF_SIZE_PREF_KEY, "0");
             modified=true;
         }
         if (!sharedPreferences.contains(SettingsActivity.ORIENTATION_PREF_KEY)) {
@@ -443,15 +390,23 @@ public class MainActivity extends AppCompatActivity {
         return clear;
     }
 
-    private int getScale() {
-        int pref = sharedPreferences.getInt(SettingsActivity.SCALE_PREF_KEY,0);
+    private int getScaleFactor() {
+        int pref = sharedPreferences.getInt(SettingsActivity.SCALE_PREF_KEY, 0);
         if (5==pref) {
-            return 0;
+            return 100;
         }
         if (pref<5) {
-            return (int)Math.round(initialWebViewScale *(100+(5*(pref-5))));
+            return 100+(5*(pref-5));
         }
-        return (int)Math.round(initialWebViewScale *(100+(10*(pref-5))));
+        return 100+(10*(pref-5));
+    }
+
+    private int getScale() {
+        int factor = getScaleFactor();
+        if (100==factor) {
+            return 0;
+        }
+        return (int)Math.round(initialWebViewScale * factor);
     }
 
     @Override
@@ -612,7 +567,7 @@ public class MainActivity extends AppCompatActivity {
         }
         initialWebViewScale = getResources().getDisplayMetrics().density;
         currentScale = getScale();
-        webView.setInitialScale(currentScale);
+        webView.setInitialScale(100==currentScale ? 0 : currentScale);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         webView.setHorizontalScrollBarEnabled(false);
         webView.setVerticalScrollBarEnabled(false);
@@ -947,51 +902,6 @@ public class MainActivity extends AppCompatActivity {
             disconnectHandler = null;
         }
     }
-    @JavascriptInterface
-    public void cancelDownload(String str) {
-        Utils.debug(str);
-
-        try {
-            if (downloadServiceMessenger!=null) {
-                Message msg = Message.obtain(null, DownloadService.CANCEL_LIST, new JSONArray(str));
-                try {
-                    downloadServiceMessenger.send(msg);
-                } catch (RemoteException e) {
-                    Utils.error("Failed to request download cancel");
-                }
-            }
-        } catch (Exception e) {
-            Utils.error("failed to decode cancelDownload", e);
-        }
-    }
-
-    @JavascriptInterface
-    public void download(String str) {
-        Utils.debug(str);
-
-        try {
-            doDownload(new JSONArray(str));
-        } catch (Exception e) {
-            Utils.error("failed to decode download", e);
-        }
-    }
-
-    private void doDownload(JSONArray data) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Environment.isExternalStorageManager()) {
-            Utils.debug("Request manage permission");
-            Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + BuildConfig.APPLICATION_ID));
-            startActivityForResult(intent, STORAGE_ACCESS_REQUEST_CODE);
-            downloadData = data;
-        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-                ( checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED ||
-                        checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED ) ) {
-            Utils.debug("Request r/w permissions");
-            requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
-            downloadData = data;
-        } else {
-            startDownload(data);
-        }
-    }
 
     private void showMessage(String msg, boolean error) {
         runOnUiThread(() -> {
@@ -1061,27 +971,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        // If MANAGE_EXTERNAL_STORAGE permission is rejected then we can still download, just not cover-art
-        startDownload(downloadData);
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        if (requestCode == 1) {
-            for (int result : grantResults) {
-                if (PackageManager.PERMISSION_GRANTED != result) {
-                    Utils.debug("Read/write external storage permission not granted");
-                    return;
-                }
-            }
-            startDownload(downloadData);
-        }
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-    }
-
-    @Override
     protected void onPause() {
         Utils.info("");
         webView.onPause();
@@ -1120,7 +1009,6 @@ public class MainActivity extends AppCompatActivity {
         isCurrentActivity = true;
 
         if (!settingsShown) {
-            updateDownloadStatus();
             if (pageLoaded) {
                 localPlayer.autoStart(true);
             }
@@ -1140,7 +1028,7 @@ public class MainActivity extends AppCompatActivity {
         int scale = getScale();
         if (scale!=currentScale) {
             currentScale = scale;
-            webView.setInitialScale(scale);
+            webView.setInitialScale(100==scale ? 0 : scale);
             needReload = true;
         }
         if (clearCache()) {
@@ -1186,18 +1074,6 @@ public class MainActivity extends AppCompatActivity {
         notifications = notificationsNow;
         manageShowOverLockscreen();
         reloadUrlAfterSettings=false;
-        updateDownloadStatus();
-    }
-
-    private void updateDownloadStatus() {
-        if (downloadServiceMessenger!=null) {
-            Message msg = Message.obtain(null, DownloadService.STATUS_REQ);
-            try {
-                downloadServiceMessenger.send(msg);
-            } catch (RemoteException e) {
-                Utils.error("Failed to request download update");
-            }
-        }
     }
 
     @Override
@@ -1334,24 +1210,6 @@ public class MainActivity extends AppCompatActivity {
             } catch (RemoteException e) {
                 Utils.error("Failed to refresh service");
             }
-        }
-    }
-
-    void startDownload(JSONArray data) {
-        if (downloadServiceMessenger!= null) {
-            Utils.debug("Send track list to download service");
-            Message msg = Message.obtain(null, DownloadService.DOWNLOAD_LIST, data);
-            try {
-                downloadServiceMessenger.send(msg);
-            } catch (RemoteException e) {
-                Utils.error("Failed to send data to download service");
-            }
-            downloadData = null;
-        } else {
-            downloadData = data;
-            Utils.debug("Start download service");
-            Intent intent = new Intent(MainActivity.this, DownloadService.class);
-            bindService(intent, downloadServiceConnection, Context.BIND_AUTO_CREATE);
         }
     }
 
