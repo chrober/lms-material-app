@@ -1,0 +1,1310 @@
+/**
+ * LMS-Material-App
+ *
+ * Copyright (c) 2020-2026 Craig Drummond <craig.p.drummond@gmail.com>
+ * MIT license.
+ */
+
+package com.craigd.lmsmaterial.app;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Bundle;
+import android.support.v4.media.MediaBrowserCompat;
+import android.support.v4.media.MediaDescriptionCompat;
+
+import androidx.media.utils.MediaConstants;
+import androidx.preference.PreferenceManager;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+public class LmsBrowseHelper {
+    public static final String ACTIVE_LIBRARY_PREF_KEY = "active_library";
+    public static final String ROOT_ID = "__ROOT__";
+    public static final String ARTISTS_GROUP_ID = "__ARTISTS_GROUP__";
+    public static final String RELEASES_GROUP_ID = "__RELEASES_GROUP__";
+    public static final String ALBUM_ARTISTS_ID = "__ALBUM_ARTISTS__";
+    public static final String ALL_ARTISTS_ID = "__ALL_ARTISTS__";
+    public static final String NEW_ARTISTS_ID = "__NEW_ARTISTS__";
+    public static final String ALBUMS_NEW_ID = "__ALBUMS_NEW__";
+    public static final String ALBUMS_RANDOM_ID = "__ALBUMS_RANDOM__";
+    public static final String ALBUMS_ALPHA_ID = "__ALBUMS_ALPHA__";
+    public static final String ALBUMS_BY_YEAR_ID = "__ALBUMS_BY_YEAR__";
+    public static final String FAVORITES_ID = "__FAVORITES__";
+    public static final String PLAYLISTS_ID = "__PLAYLISTS__";
+    public static final String PLAYERS_ID = "__PLAYERS__";
+    public static final String LIBRARIES_ID = "__LIBRARIES__";
+
+    private static final int BROWSE_LIMIT = 10000;
+    private static final int PAGE_SIZE = 500;
+    private static final int GROUP_PREVIEW_COUNT = 39;
+    private static final int INDEX_FETCH_LIMIT = 25000;
+    private static final int SEARCH_LIMIT = 50;
+    private static final int TIMEOUT_MS = 15000;
+    private static final int INDEX_TIMEOUT_MS = 45000;
+
+    private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY,MORE,YEAR";
+
+    private final JsonRpc rpc;
+    private final SharedPreferences prefs;
+    private final String packageName;
+    private Integer groupByReleaseType = null;
+    private Map<String, String> labels = null;
+    private List<GroupIndex> albumArtistIndex = null;
+    private List<GroupIndex> allArtistIndex = null;
+    private List<GroupIndex> albumsAlphaIndex = null;
+
+    private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
+
+    private static class GroupIndex {
+        final String key;
+        final int offset;
+        final int count;
+
+        GroupIndex(String key, int offset, int count) {
+            this.key = key;
+            this.offset = offset;
+            this.count = count;
+        }
+    }
+
+    public LmsBrowseHelper(Context context) {
+        rpc = new JsonRpc(context);
+        prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        packageName = context.getPackageName();
+    }
+
+    public void reset() {
+        groupByReleaseType = null;
+        labels = null;
+        albumArtistIndex = null;
+        allArtistIndex = null;
+        albumsAlphaIndex = null;
+    }
+
+    private boolean shouldGroupByReleaseType() {
+        if (null==groupByReleaseType) {
+            groupByReleaseType = 0;
+            try {
+                JSONObject resp = rpc.sendMessageSync("", new String[]{"pref", "ignoreReleaseTypes", "?"}, TIMEOUT_MS);
+                if (null!=resp) {
+                    JSONObject result = resp.optJSONObject("result");
+                    if (null!=result && "1".equals(result.optString("_p2", "0"))) {
+                        return false;
+                    }
+                }
+                resp = rpc.sendMessageSync("", new String[]{"pref", "groupArtistAlbumsByReleaseType", "?"}, TIMEOUT_MS);
+                if (null!=resp) {
+                    JSONObject result = resp.optJSONObject("result");
+                    if (null!=result) {
+                        groupByReleaseType = Integer.parseInt(result.optString("_p2", "0"));
+                    }
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to query release type prefs");
+            }
+        }
+        return groupByReleaseType > 0;
+    }
+
+    private String releaseTypeHeader(String type) {
+        switch (type) {
+            case "ALBUM": return "Albums";
+            case "EP": return "EPs";
+            case "SINGLE": return "Singles";
+            case "COMPILATION": return "Compilations";
+            case "BOXSET": return "Box Sets";
+            case "BESTOF": return "Best Of";
+            case "APPEARANCE": return "Appearances";
+            default: return type.substring(0, 1).toUpperCase(Locale.ROOT) +
+                    type.substring(1).toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private void ensureLabelsLoaded() {
+        if (null!=labels) return;
+        labels = new HashMap<>();
+        labels.put("BROWSE_BY_ARTIST", "Artists");
+        labels.put("BROWSE_BY_ALBUMARTIST", "Album Artists");
+        labels.put("BROWSE_BY_ALL_ARTISTS", "All Artists");
+        labels.put("BROWSE_BY_ALBUM", "Albums");
+        labels.put("BROWSE_NEW_MUSIC", "New Music");
+        labels.put("FAVORITES", "Favorites");
+        labels.put("SAVED_PLAYLISTS", "Playlists");
+        labels.put("PLAYERS", "Players");
+        labels.put("NEW_ARTISTS", "New Artists");
+        labels.put("RANDOM_ALBUMS", "Random Albums");
+        labels.put("ARTISTS", "Artists");
+        labels.put("ALBUMS", "Albums");
+        labels.put("SONGS", "Songs");
+        labels.put("LIBRARY", "Libraries");
+        labels.put("ALL_TRACKS", "All");
+        labels.put("MORE", "More");
+        labels.put("YEAR", "Year");
+        try {
+            JSONObject resp = rpc.sendMessageSync("", new String[]{"getstring", LABEL_TOKENS}, TIMEOUT_MS);
+            if (null!=resp) {
+                JSONObject result = resp.optJSONObject("result");
+                if (null!=result) {
+                    Iterator<String> keys = result.keys();
+                    while (keys.hasNext()) {
+                        String key = keys.next();
+                        String value = result.optString(key, "");
+                        if (!value.isEmpty()) {
+                            labels.put(key, value);
+                        }
+                    }
+                    String newArtists = result.optString("PLUGIN_MATERIAL_SKIN_NEW_ARTISTS", "");
+                    if (!newArtists.isEmpty()) {
+                        labels.put("NEW_ARTISTS", newArtists);
+                    }
+                    String randomMix = result.optString("PLUGIN_MATERIAL_SKIN_RANDOM_MIX", "");
+                    if (!randomMix.isEmpty()) {
+                        labels.put("RANDOM_ALBUMS", randomMix);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to load labels from server");
+        }
+    }
+
+    private String getLabel(String key) {
+        String val = labels.get(key);
+        return null!=val ? val : key;
+    }
+
+    private String getLibraryId() {
+        return prefs.getString(ACTIVE_LIBRARY_PREF_KEY, null);
+    }
+
+    private void addLibraryParam(List<String> params) {
+        String lib = getLibraryId();
+        if (null!=lib) {
+            params.add("library_id:" + lib);
+        }
+    }
+
+    public List<MediaBrowserCompat.MediaItem> loadChildren(String parentMediaId) {
+        if (ROOT_ID.equals(parentMediaId)) {
+            return loadRoot();
+        } else if (ARTISTS_GROUP_ID.equals(parentMediaId)) {
+            return loadArtistsGroup();
+        } else if (RELEASES_GROUP_ID.equals(parentMediaId)) {
+            return loadReleasesGroup();
+        } else if (ALBUM_ARTISTS_ID.equals(parentMediaId)) {
+            return loadArtistsGrouped(ALBUM_ARTISTS_ID, true);
+        } else if (parentMediaId.startsWith(ALBUM_ARTISTS_ID + ":")) {
+            return loadArtistGroupPage(parentMediaId, ALBUM_ARTISTS_ID, true);
+        } else if (ALL_ARTISTS_ID.equals(parentMediaId)) {
+            return loadArtistsGrouped(ALL_ARTISTS_ID, false);
+        } else if (parentMediaId.startsWith(ALL_ARTISTS_ID + ":")) {
+            return loadArtistGroupPage(parentMediaId, ALL_ARTISTS_ID, false);
+        } else if (NEW_ARTISTS_ID.equals(parentMediaId) || parentMediaId.startsWith(NEW_ARTISTS_ID + "/")) {
+            return loadNewArtists(parseOffset(parentMediaId, NEW_ARTISTS_ID));
+        } else if (ALBUMS_ALPHA_ID.equals(parentMediaId)) {
+            return loadAlbumsAlphaGrouped();
+        } else if (parentMediaId.startsWith(ALBUMS_ALPHA_ID + ":")) {
+            return loadAlbumsAlphaPage(parentMediaId);
+        } else if (ALBUMS_BY_YEAR_ID.equals(parentMediaId)) {
+            return loadAlbumsByYearGrouped();
+        } else if (parentMediaId.startsWith(ALBUMS_BY_YEAR_ID + ":")) {
+            return loadAlbumsByYearPage(parentMediaId);
+        } else if (ALBUMS_NEW_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_NEW_ID + "/")) {
+            return loadAlbums("sort:new", parseOffset(parentMediaId, ALBUMS_NEW_ID));
+        } else if (ALBUMS_RANDOM_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_RANDOM_ID + "/")) {
+            return loadAlbums("sort:random", parseOffset(parentMediaId, ALBUMS_RANDOM_ID));
+        } else if (FAVORITES_ID.equals(parentMediaId)) {
+            return loadFavorites();
+        } else if (PLAYLISTS_ID.equals(parentMediaId)) {
+            return loadPlaylists();
+        } else if (PLAYERS_ID.equals(parentMediaId)) {
+            return loadPlayers();
+        } else if (LIBRARIES_ID.equals(parentMediaId)) {
+            return loadLibraries();
+        } else if (parentMediaId.startsWith("player/")) {
+            switchPlayer(parentMediaId.substring(7));
+            return loadPlayers();
+        } else if (parentMediaId.startsWith("library/")) {
+            switchLibrary(parentMediaId.substring(8));
+            return loadLibraries();
+        } else if (parentMediaId.startsWith("artist/")) {
+            return loadArtistAlbums(parentMediaId.substring(7));
+        } else if (parentMediaId.startsWith("album/")) {
+            return loadAlbumTracks(parentMediaId.substring(6));
+        } else if (parentMediaId.startsWith("playlist/")) {
+            return loadPlaylistTracks(parentMediaId.substring(9));
+        } else if (parentMediaId.startsWith("favorite_folder/")) {
+            return loadFavoriteFolder(parentMediaId.substring(16));
+        }
+        return new ArrayList<>();
+    }
+
+    private int parseOffset(String mediaId, String prefix) {
+        if (mediaId.length() > prefix.length() + 1) {
+            try {
+                return Integer.parseInt(mediaId.substring(prefix.length() + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse offset from: " + mediaId);
+            }
+        }
+        return 0;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadRoot() {
+        ensureLabelsLoaded();
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
+        items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
+        items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
+        items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
+        items.add(buildBrowsableItem(LIBRARIES_ID, getLabel("LIBRARY"), drawableUri(R.drawable.ic_library)));
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadArtistsGroup() {
+        ensureLabelsLoaded();
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        items.add(buildBrowsableItem(ALBUM_ARTISTS_ID, getLabel("BROWSE_BY_ALBUMARTIST"), drawableUri(R.drawable.ic_album_artist)));
+        items.add(buildBrowsableItem(ALL_ARTISTS_ID, getLabel("BROWSE_BY_ALL_ARTISTS"), drawableUri(R.drawable.ic_artist)));
+        items.add(buildBrowsableItem(NEW_ARTISTS_ID, getLabel("NEW_ARTISTS"), drawableUri(R.drawable.ic_artist_new)));
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
+        ensureLabelsLoaded();
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
+        items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
+        items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
+        items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadArtistsGrouped(String baseId, boolean albumArtistsOnly) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("artists");
+            params.add("0");
+            params.add(String.valueOf(INDEX_FETCH_LIMIT));
+            if (albumArtistsOnly) params.add("role_id:5");
+            params.add("tags:s");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("artists_loop");
+            if (null==loop) return items;
+
+            List<GroupIndex> index = albumArtistsOnly ? albumArtistIndex : allArtistIndex;
+            if (null==index) {
+                index = buildLetterIndexFromLoop(loop);
+                if (albumArtistsOnly) {
+                    albumArtistIndex = index;
+                } else {
+                    allArtistIndex = index;
+                }
+            }
+
+            for (GroupIndex group : index) {
+                int displayCount = group.count > 40 ? GROUP_PREVIEW_COUNT : group.count;
+                for (int i = 0; i < displayCount && (group.offset + i) < loop.length(); i++) {
+                    JSONObject artist = loop.getJSONObject(group.offset + i);
+                    String id = artist.optString("id", "");
+                    String name = artist.optString("artist", "");
+                    Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                    items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
+                }
+                if (group.count > 40) {
+                    String showAllSubtitle = "Show all " + group.count + " artists";
+                    items.add(buildBrowsableItem(baseId + ":" + group.key, group.key, showAllSubtitle, null));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load grouped artists", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsAlphaGrouped() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add("0");
+            params.add(String.valueOf(INDEX_FETCH_LIMIT));
+            params.add("sort:album");
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            if (null==albumsAlphaIndex) {
+                albumsAlphaIndex = buildLetterIndexFromLoop(loop);
+            }
+
+            for (GroupIndex group : albumsAlphaIndex) {
+                int displayCount = group.count > 40 ? GROUP_PREVIEW_COUNT : group.count;
+                for (int i = 0; i < displayCount && (group.offset + i) < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(group.offset + i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    String artist = album.optString("artist", "");
+                    int year = album.optInt("year", 0);
+                    if (year > 0) {
+                        title = title + " (" + year + ")";
+                    }
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                }
+                if (group.count > 40) {
+                    String showAllSubtitle = "Show all " + group.count + " albums";
+                    items.add(buildBrowsableItem(ALBUMS_ALPHA_ID + ":" + group.key, group.key, showAllSubtitle, null));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums alphabetically grouped", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsByYearGrouped() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("years");
+            params.add("0");
+            params.add("10000");
+            params.add("hasAlbums:1");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("years_loop");
+            if (null==loop) return items;
+
+            for (int i = loop.length() - 1; i >= 0; i--) {
+                JSONObject entry = loop.getJSONObject(i);
+                int year = entry.optInt("year", 0);
+                String yearKey = year > 0 ? String.valueOf(year) : "Unknown";
+                items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + yearKey, yearKey, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load years", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadArtistGroupPage(String mediaId, String baseId, boolean albumArtistsOnly) {
+        String suffix = mediaId.substring(baseId.length() + 1);
+        int slashPos = suffix.indexOf('/');
+        String letter = slashPos < 0 ? suffix : suffix.substring(0, slashPos);
+        int pageOffset = 0;
+        if (slashPos >= 0) {
+            try {
+                pageOffset = Integer.parseInt(suffix.substring(slashPos + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse page offset from: " + mediaId);
+            }
+        }
+
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        List<GroupIndex> index = albumArtistsOnly ? albumArtistIndex : allArtistIndex;
+        GroupIndex group = findGroup(index, letter);
+        if (null==group) return items;
+
+        int absoluteOffset = group.offset + pageOffset;
+        int remaining = group.count - pageOffset;
+        int fetchCount = Math.min(PAGE_SIZE, remaining);
+
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("artists");
+            params.add(String.valueOf(absoluteOffset));
+            params.add(String.valueOf(fetchCount));
+            if (albumArtistsOnly) params.add("role_id:5");
+            params.add("tags:s");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("artists_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject artist = loop.getJSONObject(i);
+                String id = artist.optString("id", "");
+                String name = artist.optString("artist", "");
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
+            }
+
+            int nextPageOffset = pageOffset + PAGE_SIZE;
+            if (nextPageOffset < group.count) {
+                items.add(buildBrowsableItem(baseId + ":" + letter + "/" + nextPageOffset,
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + group.count + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load artist group page", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsAlphaPage(String mediaId) {
+        String suffix = mediaId.substring(ALBUMS_ALPHA_ID.length() + 1);
+        int slashPos = suffix.indexOf('/');
+        String letter = slashPos < 0 ? suffix : suffix.substring(0, slashPos);
+        int pageOffset = 0;
+        if (slashPos >= 0) {
+            try {
+                pageOffset = Integer.parseInt(suffix.substring(slashPos + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse page offset from: " + mediaId);
+            }
+        }
+
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        GroupIndex group = findGroup(albumsAlphaIndex, letter);
+        if (null==group) return items;
+
+        int absoluteOffset = group.offset + pageOffset;
+        int remaining = group.count - pageOffset;
+        int fetchCount = Math.min(PAGE_SIZE, remaining);
+
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add(String.valueOf(absoluteOffset));
+            params.add(String.valueOf(fetchCount));
+            params.add("sort:album");
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                String id = album.optString("id", "");
+                String title = album.optString("album", "");
+                String artist = album.optString("artist", "");
+                int year = album.optInt("year", 0);
+                if (year > 0) {
+                    title = title + " (" + year + ")";
+                }
+                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+            }
+
+            int nextPageOffset = pageOffset + PAGE_SIZE;
+            if (nextPageOffset < group.count) {
+                items.add(buildBrowsableItem(ALBUMS_ALPHA_ID + ":" + letter + "/" + nextPageOffset,
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + group.count + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums alpha page", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumsByYearPage(String mediaId) {
+        String suffix = mediaId.substring(ALBUMS_BY_YEAR_ID.length() + 1);
+        int slashPos = suffix.indexOf('/');
+        String yearKey = slashPos < 0 ? suffix : suffix.substring(0, slashPos);
+        int pageOffset = 0;
+        if (slashPos >= 0) {
+            try {
+                pageOffset = Integer.parseInt(suffix.substring(slashPos + 1));
+            } catch (NumberFormatException e) {
+                Utils.debug("Failed to parse page offset from: " + mediaId);
+            }
+        }
+
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add(String.valueOf(pageOffset));
+            params.add(String.valueOf(PAGE_SIZE));
+            params.add("sort:album");
+            params.add("year:" + ("Unknown".equals(yearKey) ? "0" : yearKey));
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                String id = album.optString("id", "");
+                String title = album.optString("album", "");
+                String artist = album.optString("artist", "");
+                int year = album.optInt("year", 0);
+                if (year > 0) {
+                    title = title + " (" + year + ")";
+                }
+                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+            }
+
+            int total = result.optInt("count", 0);
+            int nextPageOffset = pageOffset + PAGE_SIZE;
+            if (nextPageOffset < total) {
+                items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID + ":" + yearKey + "/" + nextPageOffset,
+                        "► " + getLabel("MORE") + " (" + nextPageOffset + "/" + total + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums by year page", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadNewArtists(int offset) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("artists");
+            params.add(String.valueOf(offset));
+            params.add(String.valueOf(PAGE_SIZE));
+            params.add("sort:new");
+            params.add("tags:4s");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("artists_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject artist = loop.getJSONObject(i);
+                String id = artist.optString("id", "");
+                String name = artist.optString("artist", "");
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                items.add(buildBrowsableItem("artist/" + id, name, null, artUri));
+            }
+
+            int total = result.optInt("count", 0);
+            int nextOffset = offset + PAGE_SIZE;
+            if (nextOffset < total) {
+                items.add(buildBrowsableItem(NEW_ARTISTS_ID + "/" + nextOffset,
+                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load new artists", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbums(String sortParam, int offset) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add(String.valueOf(offset));
+            params.add(String.valueOf(PAGE_SIZE));
+            if (null!=sortParam) {
+                params.add(sortParam);
+            }
+            params.add("tags:ajlsy");
+            addLibraryParam(params);
+
+            JSONObject resp = rpc.sendMessageSync("",
+                    params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                String id = album.optString("id", "");
+                String title = album.optString("album", "");
+                String artist = album.optString("artist", "");
+                int year = album.optInt("year", 0);
+                if (year > 0) {
+                    title = title + " (" + year + ")";
+                }
+                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+            }
+
+            String baseId = "sort:new".equals(sortParam) ? ALBUMS_NEW_ID : ALBUMS_RANDOM_ID;
+            int total = result.optInt("count", 0);
+            int nextOffset = offset + PAGE_SIZE;
+            if (nextOffset < total) {
+                items.add(buildBrowsableItem(baseId + "/" + nextOffset,
+                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + total + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load albums", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadArtistAlbums(String artistId) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            boolean groupReleases = shouldGroupByReleaseType();
+            List<String> params = new ArrayList<>();
+            params.add("albums");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("artist_id:" + artistId);
+            params.add(groupReleases ? "tags:ajlsywW" : "tags:ajlsy");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+
+            if (groupReleases) {
+                Map<String, List<MediaBrowserCompat.MediaItem>> groups = new LinkedHashMap<>();
+                for (String type : RELEASE_TYPE_ORDER) {
+                    groups.put(type, new ArrayList<>());
+                }
+
+                for (int i = 0; i < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    int year = album.optInt("year", 0);
+                    if (year > 0) {
+                        title = title + " (" + year + ")";
+                    }
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+
+                    String releaseType = album.optString("release_type", "ALBUM").toUpperCase(Locale.ROOT);
+                    boolean isCompilation = album.optInt("compilation", 0) == 1 && "ALBUM".equals(releaseType);
+                    String group = isCompilation ? "COMPILATION" : releaseType;
+
+                    if (!groups.containsKey(group)) {
+                        groups.put(group, new ArrayList<>());
+                    }
+                    groups.get(group).add(buildPlayableItemWithGroup("album/" + id, title, null, artUri, releaseTypeHeader(group)));
+                }
+
+                for (String type : RELEASE_TYPE_ORDER) {
+                    List<MediaBrowserCompat.MediaItem> groupItems = groups.get(type);
+                    if (null!=groupItems && !groupItems.isEmpty()) {
+                        items.addAll(groupItems);
+                    }
+                }
+                for (Map.Entry<String, List<MediaBrowserCompat.MediaItem>> entry : groups.entrySet()) {
+                    if (Arrays.asList(RELEASE_TYPE_ORDER).contains(entry.getKey())) continue;
+                    if (!entry.getValue().isEmpty()) {
+                        items.addAll(entry.getValue());
+                    }
+                }
+            } else {
+                for (int i = 0; i < loop.length(); i++) {
+                    JSONObject album = loop.getJSONObject(i);
+                    String id = album.optString("id", "");
+                    String title = album.optString("album", "");
+                    int year = album.optInt("year", 0);
+                    if (year > 0) {
+                        title = title + " (" + year + ")";
+                    }
+                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    items.add(buildPlayableItem("album/" + id, title, null, artUri));
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load artist albums", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadAlbumTracks(String albumId) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> params = new ArrayList<>();
+            params.add("titles");
+            params.add("0");
+            params.add(String.valueOf(BROWSE_LIMIT));
+            params.add("album_id:" + albumId);
+            params.add("tags:adlN");
+            params.add("sort:tracknum");
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("titles_loop");
+            if (null==loop) return items;
+
+            items.add(buildPlayableItem("album/" + albumId, "\u25B6 Play All", null, null));
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject track = loop.getJSONObject(i);
+                String id = track.optString("id", "");
+                String title = track.optString("title", "");
+                String artist = track.optString("artist", "");
+                items.add(buildPlayableItem("track/" + id, title, artist, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load album tracks", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadFavorites() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "want_url:1"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("loop_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject item = loop.getJSONObject(i);
+                items.add(buildFavoriteMediaItem(item));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load favorites", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadFavoriteFolder(String folderId) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"favorites", "items", "0", String.valueOf(BROWSE_LIMIT), "item_id:" + folderId, "want_url:1"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("loop_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject item = loop.getJSONObject(i);
+                items.add(buildFavoriteMediaItem(item));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load favorite folder", e);
+        }
+        return items;
+    }
+
+    private MediaBrowserCompat.MediaItem buildFavoriteMediaItem(JSONObject item) {
+        String id = item.optString("id", "");
+        String name = item.optString("name", "");
+        String image = item.optString("image", item.optString("icon", item.optString("icon-id", "")));
+        boolean hasItems = item.optInt("hasitems", 0) > 0;
+        String url = item.optString("url", "");
+
+        if (hasItems) {
+            boolean isDefaultIcon = image.isEmpty() || image.startsWith("html/images/favorites");
+            Uri iconUri = isDefaultIcon ? drawableUri(R.drawable.ic_folder_favorite) : resolveImageUri(image);
+            return buildBrowsableItem("favorite_folder/" + id, name, iconUri);
+        }
+
+        if (url.contains("contributor.name")) {
+            String artistId = lookupArtistIdByName(name);
+            if (null!=artistId) {
+                Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + artistId + "/image_300x300_f");
+                return buildBrowsableItem("artist/" + artistId, name, artUri);
+            }
+        }
+
+        if (url.contains("album.title")) {
+            String albumId = lookupAlbumIdByName(name);
+            if (null!=albumId) {
+                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(image));
+            }
+        }
+
+        return buildPlayableItem("favorite/" + id, name, null, resolveImageUri(image));
+    }
+
+    private String lookupArtistIdByName(String name) {
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"artists", "0", "1", "search:" + name, "tags:s"}, TIMEOUT_MS);
+            if (null!=resp) {
+                JSONObject result = resp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("artists_loop");
+                    if (null!=loop && loop.length() > 0) {
+                        return loop.getJSONObject(0).optString("id", null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to lookup artist: " + name);
+        }
+        return null;
+    }
+
+    private String lookupAlbumIdByName(String name) {
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"albums", "0", "1", "search:" + name, "tags:j"}, TIMEOUT_MS);
+            if (null!=resp) {
+                JSONObject result = resp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("albums_loop");
+                    if (null!=loop && loop.length() > 0) {
+                        return loop.getJSONObject(0).optString("id", null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to lookup album: " + name);
+        }
+        return null;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadPlaylists() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"playlists", "0", String.valueOf(BROWSE_LIMIT), "tags:su"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("playlists_loop");
+            if (null==loop) return items;
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject pl = loop.getJSONObject(i);
+                String id = pl.optString("id", "");
+                String name = pl.optString("playlist", "");
+                items.add(buildBrowsablePlayableItem("playlist/" + id, name, null, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load playlists", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadPlaylistTracks(String playlistId) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"playlists", "tracks", "0", String.valueOf(BROWSE_LIMIT), "playlist_id:" + playlistId, "tags:adlN"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("playlisttracks_loop");
+            if (null==loop) return items;
+
+            items.add(buildPlayableItem("playlist/" + playlistId, "\u25B6 Play All", null, null));
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject track = loop.getJSONObject(i);
+                String id = track.optString("id", "");
+                String title = track.optString("title", "");
+                String artist = track.optString("artist", "");
+                items.add(buildPlayableItem("track/" + id, title, artist, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load playlist tracks", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadPlayers() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"players", "0", "10"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("players_loop");
+            if (null==loop) return items;
+
+            String currentPlayer = MainActivity.activePlayer;
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject player = loop.getJSONObject(i);
+                String id = player.optString("playerid", "");
+                String name = player.optString("name", "");
+                boolean isConnected = player.optInt("connected", 0) == 1;
+                boolean isActive = id.equals(currentPlayer);
+                if (isActive) {
+                    MainActivity.activePlayerName = name;
+                }
+                String title = (isActive ? "\u2713 " : "") + name;
+                String subtitle = isConnected ? "Connected" : "Disconnected";
+                items.add(buildBrowsableItem("player/" + id, title, subtitle, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load players", e);
+        }
+        return items;
+    }
+
+    private List<MediaBrowserCompat.MediaItem> loadLibraries() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("",
+                    new String[]{"libraries"}, TIMEOUT_MS);
+            if (null==resp) return items;
+            JSONObject result = resp.optJSONObject("result");
+            if (null==result) return items;
+            JSONArray loop = result.optJSONArray("folder_loop");
+            if (null==loop) return items;
+
+            String currentLib = getLibraryId();
+            boolean hasSelection = (null!=currentLib);
+
+            items.add(buildBrowsableItem("library/__ALL__",
+                    (!hasSelection ? "\u2713 " : "") + getLabel("ALL_TRACKS"), null, null));
+
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject lib = loop.getJSONObject(i);
+                String id = lib.optString("id", "");
+                String name = lib.optString("name", "");
+                boolean isActive = id.equals(currentLib);
+                String title = (isActive ? "\u2713 " : "") + name;
+                items.add(buildBrowsableItem("library/" + id, title, null, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load libraries", e);
+        }
+        return items;
+    }
+
+    public List<MediaBrowserCompat.MediaItem> search(String query) {
+        ensureLabelsLoaded();
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            String artistsGroup = getLabel("ARTISTS");
+            String albumsGroup = getLabel("ALBUMS");
+            String songsGroup = getLabel("SONGS");
+
+            List<String> artistParams = new ArrayList<>();
+            artistParams.add("artists");
+            artistParams.add("0");
+            artistParams.add(String.valueOf(SEARCH_LIMIT));
+            artistParams.add("search:" + query);
+            artistParams.add("tags:s");
+            addLibraryParam(artistParams);
+            JSONObject artistResp = rpc.sendMessageSync("", artistParams.toArray(new String[0]), TIMEOUT_MS);
+            if (null!=artistResp) {
+                JSONObject result = artistResp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("artists_loop");
+                    if (null!=loop) {
+                        for (int i = 0; i < loop.length(); i++) {
+                            JSONObject artist = loop.getJSONObject(i);
+                            String id = artist.optString("id", "");
+                            String name = artist.optString("artist", "");
+                            Uri artUri = resolveImageUri("/imageproxy/mai/artist/" + id + "/image_300x300_f");
+                            items.add(buildBrowsableItemWithGroup("artist/" + id, name, artUri, artistsGroup));
+                        }
+                    }
+                }
+            }
+
+            List<String> albumParams = new ArrayList<>();
+            albumParams.add("albums");
+            albumParams.add("0");
+            albumParams.add(String.valueOf(SEARCH_LIMIT));
+            albumParams.add("search:" + query);
+            albumParams.add("tags:ajlsy");
+            addLibraryParam(albumParams);
+            JSONObject albumResp = rpc.sendMessageSync("", albumParams.toArray(new String[0]), TIMEOUT_MS);
+            if (null!=albumResp) {
+                JSONObject result = albumResp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("albums_loop");
+                    if (null!=loop) {
+                        for (int i = 0; i < loop.length(); i++) {
+                            JSONObject album = loop.getJSONObject(i);
+                            String id = album.optString("id", "");
+                            String title = album.optString("album", "");
+                            String artist = album.optString("artist", "");
+                            int year = album.optInt("year", 0);
+                            if (year > 0) {
+                                title = title + " (" + year + ")";
+                            }
+                            String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
+                            Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                            items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
+                        }
+                    }
+                }
+            }
+
+            List<String> trackParams = new ArrayList<>();
+            trackParams.add("titles");
+            trackParams.add("0");
+            trackParams.add(String.valueOf(SEARCH_LIMIT));
+            trackParams.add("search:" + query);
+            trackParams.add("tags:adlsy");
+            addLibraryParam(trackParams);
+            JSONObject trackResp = rpc.sendMessageSync("", trackParams.toArray(new String[0]), TIMEOUT_MS);
+            if (null!=trackResp) {
+                JSONObject result = trackResp.optJSONObject("result");
+                if (null!=result) {
+                    JSONArray loop = result.optJSONArray("titles_loop");
+                    if (null!=loop) {
+                        for (int i = 0; i < loop.length(); i++) {
+                            JSONObject track = loop.getJSONObject(i);
+                            String id = track.optString("id", "");
+                            String title = track.optString("title", "");
+                            String artist = track.optString("artist", "");
+                            String albumName = track.optString("album", "");
+                            int year = track.optInt("year", 0);
+                            String coverId = track.optString("coverid", track.optString("artwork_track_id", id));
+                            Uri artUri = resolveImageUri("/music/" + coverId + "/cover");
+                            StringBuilder subtitle = new StringBuilder();
+                            if (!artist.isEmpty()) {
+                                subtitle.append(artist);
+                            }
+                            if (!albumName.isEmpty()) {
+                                if (subtitle.length() > 0) subtitle.append(" \u2014 ");
+                                subtitle.append(albumName);
+                                if (year > 0) subtitle.append(" (").append(year).append(")");
+                            }
+                            items.add(buildPlayableItemWithGroup("track/" + id, title, subtitle.length() > 0 ? subtitle.toString() : null, artUri, songsGroup));
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to search", e);
+        }
+        return items;
+    }
+
+    public boolean playMediaId(String mediaId) {
+        if (mediaId.startsWith("album/")) {
+            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
+            return true;
+        } else if (mediaId.startsWith("track/")) {
+            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "track_id:" + mediaId.substring(6)});
+            return true;
+        } else if (mediaId.startsWith("playlist/")) {
+            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "playlist_id:" + mediaId.substring(9)});
+            return true;
+        } else if (mediaId.startsWith("favorite/")) {
+            sendPlayCommand(new String[]{"favorites", "playlist", "play", "item_id:" + mediaId.substring(9)});
+            return true;
+        }
+        return false;
+    }
+
+    private void sendPlayCommand(String[] command) {
+        String playerId = MainActivity.activePlayer;
+        if (null!=playerId && !playerId.isEmpty()) {
+            rpc.sendMessage(playerId, command);
+        }
+    }
+
+    private void switchPlayer(String playerId) {
+        MainActivity.activePlayer = playerId;
+        prefs.edit().putString(MainActivity.CURRENT_PLAYER_ID_KEY, playerId).apply();
+    }
+
+    private void switchLibrary(String libraryId) {
+        if ("__ALL__".equals(libraryId)) {
+            prefs.edit().remove(ACTIVE_LIBRARY_PREF_KEY).apply();
+        } else {
+            prefs.edit().putString(ACTIVE_LIBRARY_PREF_KEY, libraryId).apply();
+        }
+        albumArtistIndex = null;
+        allArtistIndex = null;
+        albumsAlphaIndex = null;
+    }
+
+    private String normalizeTextkey(String textkey) {
+        if (null==textkey || textkey.isEmpty()) return "#";
+        String nfd = Normalizer.normalize(textkey, Normalizer.Form.NFD);
+        char c = Character.toUpperCase(nfd.charAt(0));
+        if (c >= '0' && c <= '9') return "123";
+        if (c >= 'A' && c <= 'Z') return String.valueOf(c);
+        return "#";
+    }
+
+    private List<GroupIndex> buildLetterIndexFromLoop(JSONArray loop) {
+        List<GroupIndex> index = new ArrayList<>();
+        try {
+            LinkedHashMap<String, int[]> groups = new LinkedHashMap<>();
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject item = loop.getJSONObject(i);
+                String textkey = item.optString("textkey", "");
+                String key = normalizeTextkey(textkey);
+                if (!groups.containsKey(key)) {
+                    groups.put(key, new int[]{i, 0});
+                }
+                groups.get(key)[1]++;
+            }
+
+            if (groups.containsKey("123")) {
+                int[] v = groups.get("123");
+                index.add(new GroupIndex("123", v[0], v[1]));
+            }
+            for (char c = 'A'; c <= 'Z'; c++) {
+                String key = String.valueOf(c);
+                if (groups.containsKey(key)) {
+                    int[] v = groups.get(key);
+                    index.add(new GroupIndex(key, v[0], v[1]));
+                }
+            }
+            if (groups.containsKey("#")) {
+                int[] v = groups.get("#");
+                index.add(new GroupIndex("#", v[0], v[1]));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to build letter index", e);
+        }
+        return index;
+    }
+
+    private GroupIndex findGroup(List<GroupIndex> index, String key) {
+        if (null==index) return null;
+        for (GroupIndex g : index) {
+            if (g.key.equals(key)) return g;
+        }
+        return null;
+    }
+
+    private Uri drawableUri(int resId) {
+        return Uri.parse("android.resource://" + packageName + "/" + resId);
+    }
+
+    private Uri resolveImageUri(String path) {
+        if (null==path || path.isEmpty()) return null;
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            return Uri.parse(path);
+        }
+        String serverUrl = rpc.getServerUrl();
+        if (null==serverUrl) return null;
+        if (!path.startsWith("/")) {
+            path = "/" + path;
+        }
+        if (path.startsWith("/imageproxy/")) {
+            String encoded = path.substring("/imageproxy/".length());
+            int imgSuffix = encoded.lastIndexOf("/image");
+            if (imgSuffix > 0) {
+                encoded = encoded.substring(0, imgSuffix);
+            }
+            String decoded = Uri.decode(encoded);
+            if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+                return Uri.parse(decoded);
+            }
+        }
+        return Uri.parse(serverUrl + path);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItem(String mediaId, String title, Uri iconUri) {
+        return buildBrowsableItem(mediaId, title, null, iconUri);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItem(String mediaId, String title, String subtitle, Uri iconUri) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsablePlayableItem(String mediaId, String title, String subtitle, Uri iconUri) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE | MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildPlayableItem(String mediaId, String title, String subtitle, Uri iconUri) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItemWithGroup(String mediaId, String title, Uri iconUri, String groupTitle) {
+        return buildBrowsableItemWithGroup(mediaId, title, null, iconUri, groupTitle);
+    }
+
+    private MediaBrowserCompat.MediaItem buildBrowsableItemWithGroup(String mediaId, String title, String subtitle, Uri iconUri, String groupTitle) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        Bundle extras = new Bundle();
+        extras.putString(MediaConstants.DESCRIPTION_EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, groupTitle);
+        desc.setExtras(extras);
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
+    }
+
+    private MediaBrowserCompat.MediaItem buildPlayableItemWithGroup(String mediaId, String title, String subtitle, Uri iconUri, String groupTitle) {
+        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                .setMediaId(mediaId)
+                .setTitle(title);
+        if (null!=subtitle) {
+            desc.setSubtitle(subtitle);
+        }
+        if (null!=iconUri) {
+            desc.setIconUri(iconUri);
+        }
+        Bundle extras = new Bundle();
+        extras.putString(MediaConstants.DESCRIPTION_EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, groupTitle);
+        desc.setExtras(extras);
+        return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
+    }
+
+}

@@ -451,6 +451,7 @@ public class CometClient {
         PlayerStatus status = new PlayerStatus();
         status.id = id;
         status.timestamp = SystemClock.elapsedRealtime();
+        status.mode = mode;
         status.artist = artist;
         status.album = album;
         if (!Utils.isEmpty(remote_title) && (!remote_title.startsWith("http") || Utils.isEmpty(title))) {
