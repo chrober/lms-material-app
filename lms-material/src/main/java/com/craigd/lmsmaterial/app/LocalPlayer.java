@@ -19,10 +19,13 @@ public class LocalPlayer {
     public static final String SB_PLAYER = "sbplayer";
     public static final String SQUEEZE_PLAYER = "squeezeplayer";
     public static final String SQUEEZELITE = "squeezelite";
+    public static final String SQUEEZELITE_CHROBER = "squeezelite_chrober";
 
     public static final String SB_PLAYER_PKG = "com.angrygoat.android.sbplayer";
     public static final String SQUEEZE_PLAYER_PKG = "de.bluegaspode.squeezeplayer";
     public static final String SQUEEZELITE_PKG = "org.lyrion.squeezelite";
+    public static final String SQUEEZELITE_CHROBER_PKG = "org.lyrion.squeezelite.chrober";
+    private static final String SQUEEZELITE_SERVICE_CLASS = "org.lyrion.squeezelite.PlayerService";
     private final SharedPreferences sharedPreferences;
     private final Context context;
     private JsonRpc rpc = null;
@@ -71,7 +74,11 @@ public class LocalPlayer {
                 state = State.STARTED;
             }
         } else if (SQUEEZELITE.equals(playerApp)) {
-            if (controlSqueezelite(true)) {
+            if (controlSqueezelite(true, SQUEEZELITE_PKG, "Squeezelite")) {
+                state = State.STARTED;
+            }
+        } else if (SQUEEZELITE_CHROBER.equals(playerApp)) {
+            if (controlSqueezelite(true, SQUEEZELITE_CHROBER_PKG, "Squeezelite (chrober)")) {
                 state = State.STARTED;
             }
         }
@@ -99,7 +106,11 @@ public class LocalPlayer {
                 state = State.STOPPED;
             }
         } else if (SQUEEZELITE.equals(playerApp)) {
-            if (controlSqueezelite(false)) {
+            if (controlSqueezelite(false, SQUEEZELITE_PKG, "Squeezelite")) {
+                state = State.STOPPED;
+            }
+        } else if (SQUEEZELITE_CHROBER.equals(playerApp)) {
+            if (controlSqueezelite(false, SQUEEZELITE_CHROBER_PKG, "Squeezelite (chrober)")) {
                 state = State.STOPPED;
             }
         }
@@ -157,13 +168,13 @@ public class LocalPlayer {
         }
     }
 
-    private boolean controlSqueezelite(boolean start) {
-        if (!Utils.isInstalled(context, SQUEEZELITE_PKG, "Squeezelite")) {
+    private boolean controlSqueezelite(boolean start, String pkg, String name) {
+        if (!Utils.isInstalled(context, pkg, name)) {
             return false;
         }
         try {
             Intent intent = new Intent();
-            intent.setClassName(SQUEEZELITE_PKG, SQUEEZELITE_PKG+".PlayerService");
+            intent.setClassName(pkg, SQUEEZELITE_SERVICE_CLASS);
             if (start) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent);
