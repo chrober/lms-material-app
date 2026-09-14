@@ -39,12 +39,14 @@
         <item>SB Player</item>
         <item>SqueezePlayer</item>
         <item>Squeezelite</item>
+        <item>Squeezelite (chrober)</item>
     </string-array>
     <string-array name="playerappsAlias" translatable="false">
         <item>none</item>
         <item>sbplayer</item>
         <item>squeezeplayer</item>
         <item>squeezelite</item>
+        <item>squeezelite_chrober</item>
     </string-array>
     <string-array name="notifs">
         <item>None</item>
