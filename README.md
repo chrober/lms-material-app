@@ -5,7 +5,7 @@ skin.
 
 This app is based upon https://github.com/andreasbehnke/lms-material-app
 
-# Experimental Android Auto Support
+# Experimental Android Auto support
 
 The `chrober` fork's `build/android-auto-apk` branch contains experimental Android Auto support and a fork-only APK workflow. The shared setup, local development, and APK-testing guide is maintained in the [Squeezelite fork](https://github.com/chrober/squeezelite/blob/build/android-auto-apk/docs/android-auto.md). It is not part of the upstream project or its pull requests.
  
