@@ -40,13 +40,20 @@ public class LmsBrowseHelper {
     public static final String NEW_ARTISTS_ID = "__NEW_ARTISTS__";
     public static final String ALBUMS_NEW_ID = "__ALBUMS_NEW__";
     public static final String ALBUMS_RANDOM_ID = "__ALBUMS_RANDOM__";
+    public static final String ALBUMS_RECENTLY_PLAYED_ID = "__ALBUMS_RECENTLY_PLAYED__";
     public static final String ALBUMS_ALPHA_ID = "__ALBUMS_ALPHA__";
     public static final String ALBUMS_BY_YEAR_ID = "__ALBUMS_BY_YEAR__";
     public static final String FAVORITES_ID = "__FAVORITES__";
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
     public static final String LIBRARIES_ID = "__LIBRARIES__";
+    public static final String ALBUM_CLICK_PREF_KEY = "auto_album_click";
+    public static final String ALBUM_CLICK_TRACKS = "tracks";
+    public static final String ALBUM_CLICK_PLAY = "play";
+    private static final String ALBUM_TRACK_PREFIX = "albumtrack/";
+    private static final String ALL_LIBRARIES_ID = "-1"; // LMS: no library restriction
 
+    private static final String LIST_IMAGE_SIZE = "_300x300_f";
     private static final int BROWSE_LIMIT = 10000;
     private static final int PAGE_SIZE = 500;
     private static final int GROUP_PREVIEW_COUNT = 39;
@@ -60,13 +67,25 @@ public class LmsBrowseHelper {
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
     private final String packageName;
+    private final Context context;
     private Integer groupByReleaseType = null;
     private Map<String, String> labels = null;
     private List<GroupIndex> albumArtistIndex = null;
     private List<GroupIndex> allArtistIndex = null;
     private List<GroupIndex> albumsAlphaIndex = null;
+    private volatile AlbumTracks lastAlbumTracks = null;
 
     private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
+
+    private static class AlbumTracks {
+        final String albumId;
+        final List<String> trackIds;
+
+        AlbumTracks(String albumId, List<String> trackIds) {
+            this.albumId = albumId;
+            this.trackIds = trackIds;
+        }
+    }
 
     private static class GroupIndex {
         final String key;
@@ -84,6 +103,7 @@ public class LmsBrowseHelper {
         rpc = new JsonRpc(context);
         prefs = PreferenceManager.getDefaultSharedPreferences(context);
         packageName = context.getPackageName();
+        this.context = context.getApplicationContext();
     }
 
     public void reset() {
@@ -92,6 +112,7 @@ public class LmsBrowseHelper {
         albumArtistIndex = null;
         allArtistIndex = null;
         albumsAlphaIndex = null;
+        lastAlbumTracks = null;
     }
 
     private boolean shouldGroupByReleaseType() {
@@ -146,6 +167,7 @@ public class LmsBrowseHelper {
         labels.put("PLAYERS", "Players");
         labels.put("NEW_ARTISTS", "New Artists");
         labels.put("RANDOM_ALBUMS", "Random Albums");
+        labels.put("RECENTLY_PLAYED_ALBUMS", "Recently Played Albums");
         labels.put("ARTISTS", "Artists");
         labels.put("ALBUMS", "Albums");
         labels.put("SONGS", "Songs");
@@ -226,6 +248,8 @@ public class LmsBrowseHelper {
             return loadAlbums("sort:new", parseOffset(parentMediaId, ALBUMS_NEW_ID));
         } else if (ALBUMS_RANDOM_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_RANDOM_ID + "/")) {
             return loadAlbums("sort:random", parseOffset(parentMediaId, ALBUMS_RANDOM_ID));
+        } else if (ALBUMS_RECENTLY_PLAYED_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_RECENTLY_PLAYED_ID + "/")) {
+            return loadAlbums("sort:recentlyplayed", parseOffset(parentMediaId, ALBUMS_RECENTLY_PLAYED_ID));
         } else if (FAVORITES_ID.equals(parentMediaId)) {
             return loadFavorites();
         } else if (PLAYLISTS_ID.equals(parentMediaId)) {
@@ -266,12 +290,28 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadRoot() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
-        items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
-        items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
-        items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
-        items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
-        items.add(buildBrowsableItem(LIBRARIES_ID, getLabel("LIBRARY"), drawableUri(R.drawable.ic_library)));
+        for (String tab : AutoTabOrder.parse(prefs.getString(AutoTabOrder.PREF_KEY, null))) {
+            switch (tab) {
+                case AutoTabOrder.ALBUMS:
+                    items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
+                    break;
+                case AutoTabOrder.ARTISTS:
+                    items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
+                    break;
+                case AutoTabOrder.FAVORITES:
+                    items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
+                    break;
+                case AutoTabOrder.PLAYLISTS:
+                    items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
+                    break;
+                case AutoTabOrder.PLAYERS:
+                    items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
+                    break;
+                case AutoTabOrder.LIBRARIES:
+                    items.add(buildBrowsableItem(LIBRARIES_ID, getLabel("LIBRARY"), drawableUri(R.drawable.ic_library)));
+                    break;
+            }
+        }
         return items;
     }
 
@@ -287,10 +327,11 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
-        items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
         items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
+        items.add(buildBrowsableItem(ALBUMS_RECENTLY_PLAYED_ID, getLabel("RECENTLY_PLAYED_ALBUMS"), drawableUri(R.drawable.ic_history)));
+        items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
+        items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
         return items;
     }
 
@@ -373,9 +414,8 @@ public class LmsBrowseHelper {
                     if (year > 0) {
                         title = title + " (" + year + ")";
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                    Uri artUri = albumArtUri(album);
+                    items.add(buildAlbumItem(id, title, artist, artUri));
                 }
                 if (group.count > 40) {
                     String showAllSubtitle = "Show all " + group.count + " albums";
@@ -517,9 +557,8 @@ public class LmsBrowseHelper {
                 if (year > 0) {
                     title = title + " (" + year + ")";
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                Uri artUri = albumArtUri(album);
+                items.add(buildAlbumItem(id, title, artist, artUri));
             }
 
             int nextPageOffset = pageOffset + PAGE_SIZE;
@@ -572,9 +611,8 @@ public class LmsBrowseHelper {
                 if (year > 0) {
                     title = title + " (" + year + ")";
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                Uri artUri = albumArtUri(album);
+                items.add(buildAlbumItem(id, title, artist, artUri));
             }
 
             int total = result.optInt("count", 0);
@@ -656,12 +694,13 @@ public class LmsBrowseHelper {
                 if (year > 0) {
                     title = title + " (" + year + ")";
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                items.add(buildPlayableItem("album/" + id, title, artist, artUri));
+                Uri artUri = albumArtUri(album);
+                items.add(buildAlbumItem(id, title, artist, artUri));
             }
 
-            String baseId = "sort:new".equals(sortParam) ? ALBUMS_NEW_ID : ALBUMS_RANDOM_ID;
+            String baseId = "sort:new".equals(sortParam) ? ALBUMS_NEW_ID
+                    : "sort:recentlyplayed".equals(sortParam) ? ALBUMS_RECENTLY_PLAYED_ID
+                    : ALBUMS_RANDOM_ID;
             int total = result.optInt("count", 0);
             int nextOffset = offset + PAGE_SIZE;
             if (nextOffset < total) {
@@ -706,8 +745,7 @@ public class LmsBrowseHelper {
                     if (year > 0) {
                         title = title + " (" + year + ")";
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    Uri artUri = albumArtUri(album);
 
                     String releaseType = album.optString("release_type", "ALBUM").toUpperCase(Locale.ROOT);
                     boolean isCompilation = album.optInt("compilation", 0) == 1 && "ALBUM".equals(releaseType);
@@ -716,7 +754,7 @@ public class LmsBrowseHelper {
                     if (!groups.containsKey(group)) {
                         groups.put(group, new ArrayList<>());
                     }
-                    groups.get(group).add(buildPlayableItemWithGroup("album/" + id, title, null, artUri, releaseTypeHeader(group)));
+                    groups.get(group).add(buildAlbumItemWithGroup(id, title, null, artUri, releaseTypeHeader(group)));
                 }
 
                 for (String type : RELEASE_TYPE_ORDER) {
@@ -740,9 +778,8 @@ public class LmsBrowseHelper {
                     if (year > 0) {
                         title = title + " (" + year + ")";
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                    items.add(buildPlayableItem("album/" + id, title, null, artUri));
+                    Uri artUri = albumArtUri(album);
+                    items.add(buildAlbumItem(id, title, null, artUri));
                 }
             }
         } catch (Exception e) {
@@ -759,7 +796,7 @@ public class LmsBrowseHelper {
             params.add("0");
             params.add(String.valueOf(BROWSE_LIMIT));
             params.add("album_id:" + albumId);
-            params.add("tags:adlN");
+            params.add("tags:acdltN");
             params.add("sort:tracknum");
             addLibraryParam(params);
             JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
@@ -769,14 +806,22 @@ public class LmsBrowseHelper {
             JSONArray loop = result.optJSONArray("titles_loop");
             if (null==loop) return items;
 
-            items.add(buildPlayableItem("album/" + albumId, "\u25B6 Play All", null, null));
+            // Tapping a track queues the whole album (exactly the tracks listed, in this order) and
+            // starts playback at that track - so remember the list for playMediaId().
+            List<String> trackIds = new ArrayList<>();
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
-                String id = track.optString("id", "");
+                trackIds.add(track.optString("id", ""));
                 String title = track.optString("title", "");
-                String artist = track.optString("artist", "");
-                items.add(buildPlayableItem("track/" + id, title, artist, null));
+                String trackNum = track.optString("tracknum", "");
+                if (!trackNum.isEmpty()) {
+                    title = trackNum + ". " + title;
+                }
+                String coverId = track.optString("coverid", "");
+                Uri artUri = coverId.isEmpty() ? null : resolveImageUri("/music/" + coverId + "/cover");
+                items.add(buildPlayableItem(ALBUM_TRACK_PREFIX + albumId + "/" + i, title, track.optString("artist", ""), artUri));
             }
+            lastAlbumTracks = new AlbumTracks(albumId, trackIds);
         } catch (Exception e) {
             Utils.error("Failed to load album tracks", e);
         }
@@ -849,7 +894,7 @@ public class LmsBrowseHelper {
         if (url.contains("album.title")) {
             String albumId = lookupAlbumIdByName(name);
             if (null!=albumId) {
-                return buildPlayableItem("album/" + albumId, name, null, resolveImageUri(image));
+                return buildAlbumItem(albumId, name, null, resolveImageUri(image));
             }
         }
 
@@ -946,7 +991,7 @@ public class LmsBrowseHelper {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"players", "0", "10"}, TIMEOUT_MS);
+                    new String[]{"players", "0", "100"}, TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -954,10 +999,14 @@ public class LmsBrowseHelper {
             if (null==loop) return items;
 
             String currentPlayer = MainActivity.activePlayer;
+            String restricted = PlayerAvailability.restrictedPlayer(prefs);
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject player = loop.getJSONObject(i);
                 String id = player.optString("playerid", "");
                 String name = player.optString("name", "");
+                if (!PlayerAvailability.isAllowed(restricted, id, name)) {
+                    continue;
+                }
                 boolean isConnected = player.optInt("connected", 0) == 1;
                 boolean isActive = id.equals(currentPlayer);
                 if (isActive) {
@@ -1058,9 +1107,8 @@ public class LmsBrowseHelper {
                             if (year > 0) {
                                 title = title + " (" + year + ")";
                             }
-                            String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                            Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
-                            items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
+                            Uri artUri = albumArtUri(album);
+                            items.add(buildAlbumItemWithGroup(id, title, artist, artUri, albumsGroup));
                         }
                     }
                 }
@@ -1109,20 +1157,46 @@ public class LmsBrowseHelper {
     }
 
     public boolean playMediaId(String mediaId) {
-        if (mediaId.startsWith("album/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
+        if (mediaId.startsWith(ALBUM_TRACK_PREFIX)) {
+            String[] parts = mediaId.substring(ALBUM_TRACK_PREFIX.length()).split("/");
+            if (parts.length != 2) {
+                return false;
+            }
+            AlbumTracks tracks = lastAlbumTracks;
+            if (null!=tracks && tracks.albumId.equals(parts[0])) {
+                sendLoadCommand("track_id:" + String.join(",", tracks.trackIds), "play_index:" + parts[1]);
+            } else {
+                sendLoadCommand("album_id:" + parts[0], "play_index:" + parts[1]);
+            }
+            return true;
+        } else if (mediaId.startsWith("album/")) {
+            sendLoadCommand("album_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith("track/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "track_id:" + mediaId.substring(6)});
+            sendLoadCommand("track_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith("playlist/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "playlist_id:" + mediaId.substring(9)});
+            sendLoadCommand("playlist_id:" + mediaId.substring(9));
             return true;
         } else if (mediaId.startsWith("favorite/")) {
             sendPlayCommand(new String[]{"favorites", "playlist", "play", "item_id:" + mediaId.substring(9)});
             return true;
         }
         return false;
+    }
+
+    /**
+     * Replace the queue with the given items. Always passes an explicit library: without one, LMS filters
+     * the tracks by the *player's* library view (or the server default), which can differ from the list
+     * shown in Android Auto - e.g. a Ratings Light "Rated Tracks" view would queue only an album's rated
+     * tracks. "-1" means the whole library.
+     */
+    private void sendLoadCommand(String... items) {
+        List<String> params = new ArrayList<>(Arrays.asList("playlistcontrol", "cmd:load"));
+        params.addAll(Arrays.asList(items));
+        String lib = getLibraryId();
+        params.add("library_id:" + (null!=lib ? lib : ALL_LIBRARIES_ID));
+        sendPlayCommand(params.toArray(new String[0]));
     }
 
     private void sendPlayCommand(String[] command) {
@@ -1133,6 +1207,28 @@ public class LmsBrowseHelper {
     }
 
     private void switchPlayer(String playerId) {
+        String restricted = PlayerAvailability.restrictedPlayer(prefs);
+        if (null!=restricted && !restricted.equals(playerId)) {
+            // Restricted by ID or name - only switch if this ID belongs to the allowed player.
+            try {
+                JSONObject resp = rpc.sendMessageSync("", new String[]{"players", "0", "100"}, TIMEOUT_MS);
+                JSONObject result = null==resp ? null : resp.optJSONObject("result");
+                boolean allowed = false;
+                for (PlayerAvailability.Player player : PlayerAvailability.parse(null==result ? null : result.optJSONArray("players_loop"))) {
+                    if (player.id.equals(playerId) && PlayerAvailability.isAllowed(restricted, player.id, player.name)) {
+                        allowed = true;
+                        break;
+                    }
+                }
+                if (!allowed) {
+                    Utils.debug("Ignoring switch to non-default player " + playerId);
+                    return;
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to verify player " + playerId);
+                return;
+            }
+        }
         MainActivity.activePlayer = playerId;
         prefs.edit().putString(MainActivity.CURRENT_PLAYER_ID_KEY, playerId).apply();
     }
@@ -1146,6 +1242,7 @@ public class LmsBrowseHelper {
         albumArtistIndex = null;
         allArtistIndex = null;
         albumsAlphaIndex = null;
+        lastAlbumTracks = null;
     }
 
     private String normalizeTextkey(String textkey) {
@@ -1204,10 +1301,17 @@ public class LmsBrowseHelper {
         return Uri.parse("android.resource://" + packageName + "/" + resId);
     }
 
+    private Uri albumArtUri(JSONObject album) {
+        // Albums without artwork have no artwork_track_id; the album ID is not a track ID, so don't fall back to it.
+        String artworkId = album.optString("artwork_track_id", "");
+        return artworkId.isEmpty() ? null : resolveImageUri("/music/" + artworkId + "/cover");
+    }
+
+    // Android Auto only loads artwork from content:// URIs, so remote images go via ArtworkProvider.
     private Uri resolveImageUri(String path) {
         if (null==path || path.isEmpty()) return null;
         if (path.startsWith("http://") || path.startsWith("https://")) {
-            return Uri.parse(path);
+            return ArtworkProvider.wrap(context, path);
         }
         String serverUrl = rpc.getServerUrl();
         if (null==serverUrl) return null;
@@ -1222,10 +1326,13 @@ public class LmsBrowseHelper {
             }
             String decoded = Uri.decode(encoded);
             if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
-                return Uri.parse(decoded);
+                return ArtworkProvider.wrap(context, decoded);
             }
         }
-        return Uri.parse(serverUrl + path);
+        if (path.matches("/music/[^/]+/cover")) {
+            path += LIST_IMAGE_SIZE;
+        }
+        return ArtworkProvider.wrap(context, serverUrl + path);
     }
 
     private MediaBrowserCompat.MediaItem buildBrowsableItem(String mediaId, String title, Uri iconUri) {
@@ -1256,6 +1363,23 @@ public class LmsBrowseHelper {
             desc.setIconUri(iconUri);
         }
         return new MediaBrowserCompat.MediaItem(desc.build(), MediaBrowserCompat.MediaItem.FLAG_BROWSABLE | MediaBrowserCompat.MediaItem.FLAG_PLAYABLE);
+    }
+
+    // Depending on the setting, tapping an album either opens its track list or plays it straight away.
+    private boolean albumOpensTrackList() {
+        return !ALBUM_CLICK_PLAY.equals(prefs.getString(ALBUM_CLICK_PREF_KEY, ALBUM_CLICK_TRACKS));
+    }
+
+    private MediaBrowserCompat.MediaItem buildAlbumItem(String albumId, String title, String subtitle, Uri iconUri) {
+        return albumOpensTrackList()
+                ? buildBrowsableItem("album/" + albumId, title, subtitle, iconUri)
+                : buildPlayableItem("album/" + albumId, title, subtitle, iconUri);
+    }
+
+    private MediaBrowserCompat.MediaItem buildAlbumItemWithGroup(String albumId, String title, String subtitle, Uri iconUri, String groupTitle) {
+        return albumOpensTrackList()
+                ? buildBrowsableItemWithGroup("album/" + albumId, title, subtitle, iconUri, groupTitle)
+                : buildPlayableItemWithGroup("album/" + albumId, title, subtitle, iconUri, groupTitle);
     }
 
     private MediaBrowserCompat.MediaItem buildPlayableItem(String mediaId, String title, String subtitle, Uri iconUri) {
