@@ -46,7 +46,9 @@ public class LmsBrowseHelper {
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
     public static final String LIBRARIES_ID = "__LIBRARIES__";
+    private static final String ALL_LIBRARIES_ID = "-1"; // LMS: no library restriction
 
+    private static final String LIST_IMAGE_SIZE = "_300x300_f";
     private static final int BROWSE_LIMIT = 10000;
     private static final int PAGE_SIZE = 500;
     private static final int GROUP_PREVIEW_COUNT = 39;
@@ -60,6 +62,7 @@ public class LmsBrowseHelper {
     private final JsonRpc rpc;
     private final SharedPreferences prefs;
     private final String packageName;
+    private final Context context;
     private Integer groupByReleaseType = null;
     private Map<String, String> labels = null;
     private List<GroupIndex> albumArtistIndex = null;
@@ -84,6 +87,7 @@ public class LmsBrowseHelper {
         rpc = new JsonRpc(context);
         prefs = PreferenceManager.getDefaultSharedPreferences(context);
         packageName = context.getPackageName();
+        this.context = context.getApplicationContext();
     }
 
     public void reset() {
@@ -266,12 +270,28 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadRoot() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
-        items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
-        items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
-        items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
-        items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
-        items.add(buildBrowsableItem(LIBRARIES_ID, getLabel("LIBRARY"), drawableUri(R.drawable.ic_library)));
+        for (String tab : AutoTabOrder.parse(prefs.getString(AutoTabOrder.PREF_KEY, null))) {
+            switch (tab) {
+                case AutoTabOrder.ALBUMS:
+                    items.add(buildBrowsableItem(RELEASES_GROUP_ID, getLabel("BROWSE_BY_ALBUM"), drawableUri(R.drawable.ic_release)));
+                    break;
+                case AutoTabOrder.ARTISTS:
+                    items.add(buildBrowsableItem(ARTISTS_GROUP_ID, getLabel("BROWSE_BY_ARTIST"), drawableUri(R.drawable.ic_artist)));
+                    break;
+                case AutoTabOrder.FAVORITES:
+                    items.add(buildBrowsableItem(FAVORITES_ID, getLabel("FAVORITES"), drawableUri(R.drawable.ic_favorite)));
+                    break;
+                case AutoTabOrder.PLAYLISTS:
+                    items.add(buildBrowsableItem(PLAYLISTS_ID, getLabel("SAVED_PLAYLISTS"), drawableUri(R.drawable.ic_playlist)));
+                    break;
+                case AutoTabOrder.PLAYERS:
+                    items.add(buildBrowsableItem(PLAYERS_ID, getLabel("PLAYERS"), drawableUri(R.drawable.ic_speaker)));
+                    break;
+                case AutoTabOrder.LIBRARIES:
+                    items.add(buildBrowsableItem(LIBRARIES_ID, getLabel("LIBRARY"), drawableUri(R.drawable.ic_library)));
+                    break;
+            }
+        }
         return items;
     }
 
@@ -287,10 +307,10 @@ public class LmsBrowseHelper {
     private List<MediaBrowserCompat.MediaItem> loadReleasesGroup() {
         ensureLabelsLoaded();
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
-        items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
-        items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
         items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
+        items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
+        items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
         return items;
     }
 
@@ -373,8 +393,7 @@ public class LmsBrowseHelper {
                     if (year > 0) {
                         title = title + " (" + year + ")";
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    Uri artUri = albumArtUri(album);
                     items.add(buildPlayableItem("album/" + id, title, artist, artUri));
                 }
                 if (group.count > 40) {
@@ -517,8 +536,7 @@ public class LmsBrowseHelper {
                 if (year > 0) {
                     title = title + " (" + year + ")";
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                Uri artUri = albumArtUri(album);
                 items.add(buildPlayableItem("album/" + id, title, artist, artUri));
             }
 
@@ -572,8 +590,7 @@ public class LmsBrowseHelper {
                 if (year > 0) {
                     title = title + " (" + year + ")";
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                Uri artUri = albumArtUri(album);
                 items.add(buildPlayableItem("album/" + id, title, artist, artUri));
             }
 
@@ -656,8 +673,7 @@ public class LmsBrowseHelper {
                 if (year > 0) {
                     title = title + " (" + year + ")";
                 }
-                String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                Uri artUri = albumArtUri(album);
                 items.add(buildPlayableItem("album/" + id, title, artist, artUri));
             }
 
@@ -706,8 +722,7 @@ public class LmsBrowseHelper {
                     if (year > 0) {
                         title = title + " (" + year + ")";
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    Uri artUri = albumArtUri(album);
 
                     String releaseType = album.optString("release_type", "ALBUM").toUpperCase(Locale.ROOT);
                     boolean isCompilation = album.optInt("compilation", 0) == 1 && "ALBUM".equals(releaseType);
@@ -740,8 +755,7 @@ public class LmsBrowseHelper {
                     if (year > 0) {
                         title = title + " (" + year + ")";
                     }
-                    String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                    Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                    Uri artUri = albumArtUri(album);
                     items.add(buildPlayableItem("album/" + id, title, null, artUri));
                 }
             }
@@ -946,7 +960,7 @@ public class LmsBrowseHelper {
         List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
         try {
             JSONObject resp = rpc.sendMessageSync("",
-                    new String[]{"players", "0", "10"}, TIMEOUT_MS);
+                    new String[]{"players", "0", "100"}, TIMEOUT_MS);
             if (null==resp) return items;
             JSONObject result = resp.optJSONObject("result");
             if (null==result) return items;
@@ -954,10 +968,14 @@ public class LmsBrowseHelper {
             if (null==loop) return items;
 
             String currentPlayer = MainActivity.activePlayer;
+            String restricted = PlayerAvailability.restrictedPlayer(prefs);
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject player = loop.getJSONObject(i);
                 String id = player.optString("playerid", "");
                 String name = player.optString("name", "");
+                if (!PlayerAvailability.isAllowed(restricted, id, name)) {
+                    continue;
+                }
                 boolean isConnected = player.optInt("connected", 0) == 1;
                 boolean isActive = id.equals(currentPlayer);
                 if (isActive) {
@@ -1058,8 +1076,7 @@ public class LmsBrowseHelper {
                             if (year > 0) {
                                 title = title + " (" + year + ")";
                             }
-                            String artworkId = album.optString("artwork_track_id", album.optString("id", ""));
-                            Uri artUri = resolveImageUri("/music/" + artworkId + "/cover");
+                            Uri artUri = albumArtUri(album);
                             items.add(buildPlayableItemWithGroup("album/" + id, title, artist, artUri, albumsGroup));
                         }
                     }
@@ -1110,19 +1127,33 @@ public class LmsBrowseHelper {
 
     public boolean playMediaId(String mediaId) {
         if (mediaId.startsWith("album/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
+            sendLoadCommand("album_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith("track/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "track_id:" + mediaId.substring(6)});
+            sendLoadCommand("track_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith("playlist/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "playlist_id:" + mediaId.substring(9)});
+            sendLoadCommand("playlist_id:" + mediaId.substring(9));
             return true;
         } else if (mediaId.startsWith("favorite/")) {
             sendPlayCommand(new String[]{"favorites", "playlist", "play", "item_id:" + mediaId.substring(9)});
             return true;
         }
         return false;
+    }
+
+    /**
+     * Replace the queue with the given items. Always passes an explicit library: without one, LMS filters
+     * the tracks by the *player's* library view (or the server default), which can differ from the list
+     * shown in Android Auto - e.g. a Ratings Light "Rated Tracks" view would queue only an album's rated
+     * tracks. "-1" means the whole library.
+     */
+    private void sendLoadCommand(String... items) {
+        List<String> params = new ArrayList<>(Arrays.asList("playlistcontrol", "cmd:load"));
+        params.addAll(Arrays.asList(items));
+        String lib = getLibraryId();
+        params.add("library_id:" + (null!=lib ? lib : ALL_LIBRARIES_ID));
+        sendPlayCommand(params.toArray(new String[0]));
     }
 
     private void sendPlayCommand(String[] command) {
@@ -1133,6 +1164,28 @@ public class LmsBrowseHelper {
     }
 
     private void switchPlayer(String playerId) {
+        String restricted = PlayerAvailability.restrictedPlayer(prefs);
+        if (null!=restricted && !restricted.equals(playerId)) {
+            // Restricted by ID or name - only switch if this ID belongs to the allowed player.
+            try {
+                JSONObject resp = rpc.sendMessageSync("", new String[]{"players", "0", "100"}, TIMEOUT_MS);
+                JSONObject result = null==resp ? null : resp.optJSONObject("result");
+                boolean allowed = false;
+                for (PlayerAvailability.Player player : PlayerAvailability.parse(null==result ? null : result.optJSONArray("players_loop"))) {
+                    if (player.id.equals(playerId) && PlayerAvailability.isAllowed(restricted, player.id, player.name)) {
+                        allowed = true;
+                        break;
+                    }
+                }
+                if (!allowed) {
+                    Utils.debug("Ignoring switch to non-default player " + playerId);
+                    return;
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to verify player " + playerId);
+                return;
+            }
+        }
         MainActivity.activePlayer = playerId;
         prefs.edit().putString(MainActivity.CURRENT_PLAYER_ID_KEY, playerId).apply();
     }
@@ -1204,10 +1257,17 @@ public class LmsBrowseHelper {
         return Uri.parse("android.resource://" + packageName + "/" + resId);
     }
 
+    private Uri albumArtUri(JSONObject album) {
+        // Albums without artwork have no artwork_track_id; the album ID is not a track ID, so don't fall back to it.
+        String artworkId = album.optString("artwork_track_id", "");
+        return artworkId.isEmpty() ? null : resolveImageUri("/music/" + artworkId + "/cover");
+    }
+
+    // Android Auto only loads artwork from content:// URIs, so remote images go via ArtworkProvider.
     private Uri resolveImageUri(String path) {
         if (null==path || path.isEmpty()) return null;
         if (path.startsWith("http://") || path.startsWith("https://")) {
-            return Uri.parse(path);
+            return ArtworkProvider.wrap(context, path);
         }
         String serverUrl = rpc.getServerUrl();
         if (null==serverUrl) return null;
@@ -1222,10 +1282,13 @@ public class LmsBrowseHelper {
             }
             String decoded = Uri.decode(encoded);
             if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
-                return Uri.parse(decoded);
+                return ArtworkProvider.wrap(context, decoded);
             }
         }
-        return Uri.parse(serverUrl + path);
+        if (path.matches("/music/[^/]+/cover")) {
+            path += LIST_IMAGE_SIZE;
+        }
+        return ArtworkProvider.wrap(context, serverUrl + path);
     }
 
     private MediaBrowserCompat.MediaItem buildBrowsableItem(String mediaId, String title, Uri iconUri) {

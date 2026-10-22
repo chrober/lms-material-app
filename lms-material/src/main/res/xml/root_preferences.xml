@@ -142,6 +142,15 @@
 
     <PreferenceCategory
         app:iconSpaceReserved="false"
+        app:title="@string/android_auto">
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="auto_tab_order"
+            app:title="@string/auto_tab_order" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
         app:title="@string/advanced">
         <Preference
             app:iconSpaceReserved="false"
