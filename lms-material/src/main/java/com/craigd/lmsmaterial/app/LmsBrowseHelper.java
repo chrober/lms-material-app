@@ -46,6 +46,7 @@ public class LmsBrowseHelper {
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
     public static final String LIBRARIES_ID = "__LIBRARIES__";
+    private static final String ALL_LIBRARIES_ID = "-1"; // LMS: no library restriction
 
     private static final int BROWSE_LIMIT = 10000;
     private static final int PAGE_SIZE = 500;
@@ -1110,19 +1111,33 @@ public class LmsBrowseHelper {
 
     public boolean playMediaId(String mediaId) {
         if (mediaId.startsWith("album/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "album_id:" + mediaId.substring(6)});
+            sendLoadCommand("album_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith("track/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "track_id:" + mediaId.substring(6)});
+            sendLoadCommand("track_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith("playlist/")) {
-            sendPlayCommand(new String[]{"playlistcontrol", "cmd:load", "playlist_id:" + mediaId.substring(9)});
+            sendLoadCommand("playlist_id:" + mediaId.substring(9));
             return true;
         } else if (mediaId.startsWith("favorite/")) {
             sendPlayCommand(new String[]{"favorites", "playlist", "play", "item_id:" + mediaId.substring(9)});
             return true;
         }
         return false;
+    }
+
+    /**
+     * Replace the queue with the given items. Always passes an explicit library: without one, LMS filters
+     * the tracks by the *player's* library view (or the server default), which can differ from the list
+     * shown in Android Auto - e.g. a Ratings Light "Rated Tracks" view would queue only an album's rated
+     * tracks. "-1" means the whole library.
+     */
+    private void sendLoadCommand(String... items) {
+        List<String> params = new ArrayList<>(Arrays.asList("playlistcontrol", "cmd:load"));
+        params.addAll(Arrays.asList(items));
+        String lib = getLibraryId();
+        params.add("library_id:" + (null!=lib ? lib : ALL_LIBRARIES_ID));
+        sendPlayCommand(params.toArray(new String[0]));
     }
 
     private void sendPlayCommand(String[] command) {
