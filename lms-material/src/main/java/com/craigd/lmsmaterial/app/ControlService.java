@@ -37,6 +37,7 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.SystemClock;
 import android.support.v4.media.MediaBrowserCompat;
+import android.support.v4.media.MediaDescriptionCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
@@ -71,8 +72,10 @@ import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -91,10 +94,17 @@ public class ControlService extends MediaBrowserServiceCompat {
     public static final int LIBRARY_CHANGED = 4;
     private static final String ACTION_POWER = "power";
     private static final String ACTION_QUIT = "quit";
+    private static final String ACTION_RATE = "rate";
+    private static final int RATING_REFRESH_MS = 1000;
+    private static final int COMMAND_STATUS_REFRESH_MS = 500;
     private static final int MSG_ID = 1;
     private static final int COVER_TIMEOUT_MS = 10000;
     private static final int PLAYER_AVAILABILITY_RETRY_MS = 1000;
     private static final int PLAYER_AVAILABILITY_TIMEOUT_MS = 15000;
+    private static final int RESTRICTED_PLAYER_RETRY_MS = 5000;
+    // Android Auto reports only single taps on custom actions, so two taps this close together
+    // on the rating button count as a double tap, which resets the rating to unrated.
+    private static final long RATE_DOUBLE_TAP_MS = 400;
     private static final String[] PREV_COMMAND = {"button", "jump_rew"};
     private static final String[] PLAY_COMMAND = {"play"};
     private static final String[] PAUSE_COMMAND = {"pause", "1"};
@@ -143,6 +153,32 @@ public class ControlService extends MediaBrowserServiceCompat {
     private long playerAvailabilityDeadline;
     private boolean playerWasUnavailable;
     private final Runnable playerAvailabilityCheck = this::checkPlayerAvailability;
+    private final Runnable commandStatusRefresh = () -> {
+        if (null!=cometClient && !Utils.isEmpty(MainActivity.activePlayer)) {
+            cometClient.getPlayerStatus(MainActivity.activePlayer);
+        }
+    };
+    private Boolean ratingsSupported = null; // null until checked whether Ratings Light is installed
+    private long lastRateTap = 0;
+    private boolean checkingRatingsSupport = false;
+    // Play queue currently published to the media session (a window of the LMS playlist)
+    private String queuePlayer = null;
+    private double queueTimestamp = -1;
+    private int queueStart = -1;
+    private int queueTotal = 0;
+    private boolean queueLoading = false;
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefsListener = (sharedPreferences, key) -> {
+        if (AutoTabOrder.PREF_KEY.equals(key)) {
+            notifyChildrenChanged(LmsBrowseHelper.ROOT_ID);
+        } else if (MainActivity.CURRENT_PLAYER_ID_KEY.equals(key)) {
+            activePlayerChanged();
+        } else if (SettingsActivity.SINGLE_PLAYER_PREF_KEY.equals(key) || SettingsActivity.DEFAULT_PLAYER_PREF_KEY.equals(key)) {
+            applyPlayerRestriction();
+            startPlayerAvailabilityCheck();
+            updateNotification();
+            notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+        }
+    };
 
     private static class IncomingHandler extends Handler {
         private final WeakReference<ControlService> serviceRef;
@@ -161,6 +197,10 @@ public class ControlService extends MediaBrowserServiceCompat {
             if (msg.what == ACTIVE_PLAYER && null!=srv.notificationBuilder && null!=srv.notificationManager) {
                 String[] vals = (String[]) msg.obj;
                 Utils.debug("Set notification player name " + vals[1] + ", id:" + vals[0]);
+                if (!PlayerAvailability.isAllowed(srv.restrictedPlayer(), vals[0], vals[1])) {
+                    Utils.debug("Ignoring non-default player " + vals[0]);
+                    return;
+                }
                 srv.cancelPlayerAvailabilityCheck();
                 srv.notificationBuilder.setContentTitle(vals[1]);
                 if (null!=srv.cometClient) {
@@ -282,6 +322,7 @@ public class ControlService extends MediaBrowserServiceCompat {
         if (null!=browseHelper) {
             browseHelper.reset();
         }
+        ratingsSupported = null;
     }
 
     private synchronized MediaSessionCompat.Callback getMediaSessionCallback() {
@@ -312,6 +353,12 @@ public class ControlService extends MediaBrowserServiceCompat {
                 @Override
                 public void onSeekTo(long pos) {
                     sendCommand(new String[]{"time", Double.toString(pos / 1000.0)});
+                }
+
+                @Override
+                public void onSkipToQueueItem(long id) {
+                    // Queue item IDs are LMS playlist indexes
+                    sendCommand(new String[]{"playlist", "index", Long.toString(id)});
                 }
 
                 @Override
@@ -346,6 +393,14 @@ public class ControlService extends MediaBrowserServiceCompat {
                         quit();
                     } else if (ACTION_POWER.equals(action)) {
                         sendCommand(POWER_COMMAND);
+                    } else if (ACTION_RATE.equals(action)) {
+                        if (canRate()) {
+                            long now = SystemClock.elapsedRealtime();
+                            boolean doubleTap = now - lastRateTap < RATE_DOUBLE_TAP_MS;
+                            // A third quick tap starts a new cycle rather than another double tap.
+                            lastRateTap = doubleTap ? 0 : now;
+                            setRating(doubleTap ? 0 : Ratings.nextStars(lastStatus.rating));
+                        }
                     }
                 }
             };
@@ -361,13 +416,183 @@ public class ControlService extends MediaBrowserServiceCompat {
     }
 
     private PlaybackStateCompat.Builder playbackStateBuilder(int state, long position, float speed) {
-        return new PlaybackStateCompat.Builder()
+        PlaybackStateCompat.Builder builder = new PlaybackStateCompat.Builder()
                 .setState(state, position, speed)
                 .setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE
                         | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-                        | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_PAUSE)
-                .addCustomAction(ACTION_POWER, getString(R.string.power), android.R.drawable.ic_lock_power_off)
+                        | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_PLAY_PAUSE
+                        | PlaybackStateCompat.ACTION_SKIP_TO_QUEUE_ITEM);
+        if (null!=lastStatus && lastStatus.playlistIndex >= 0 && null!=lastStatus.id && lastStatus.id.equals(MainActivity.activePlayer)) {
+            builder.setActiveQueueItemId(lastStatus.playlistIndex);
+        }
+        // Single rating button that cycles Unrated -> 5..1 stars. (Android Auto's overflow menu
+        // shows only 5 icon-only entries and can't be dismissed, so it is no use as a picker.)
+        if (canRate()) {
+            int rating = lastStatus.rating;
+            builder.addCustomAction(ACTION_RATE, getString(R.string.rating) + " " + Ratings.stars(rating),
+                    ratingIcon(Ratings.roundedStars(rating)));
+        }
+        builder.addCustomAction(ACTION_POWER, getString(R.string.power), android.R.drawable.ic_lock_power_off)
                 .addCustomAction(ACTION_QUIT, getString(R.string.quit), R.drawable.ic_action_quit);
+        return builder;
+    }
+
+    // The rating button's icon shows the current rating, as Android Auto doesn't display action labels.
+    private static int ratingIcon(int stars) {
+        switch (stars) {
+            case 1: return R.drawable.ic_rating_1;
+            case 2: return R.drawable.ic_rating_2;
+            case 3: return R.drawable.ic_rating_3;
+            case 4: return R.drawable.ic_rating_4;
+            case 5: return R.drawable.ic_rating_5;
+            default: return R.drawable.ic_star_border;
+        }
+    }
+
+    private boolean canRate() {
+        return Boolean.TRUE.equals(ratingsSupported) && null!=lastStatus && lastStatus.trackId > 0 &&
+                null!=lastStatus.id && lastStatus.id.equals(MainActivity.activePlayer);
+    }
+
+    private void checkRatingsSupport() {
+        if (null!=ratingsSupported || checkingRatingsSupport) {
+            return;
+        }
+        checkingRatingsSupport = true;
+        getBrowseExecutor().execute(() -> {
+            // Any failure counts as "not installed" until the next reconnect resets the check, so a
+            // slow or unreachable server doesn't get re-queried (blocking browsing) on every status update.
+            boolean supported = false;
+            try {
+                if (null==rpc) {
+                    rpc = new JsonRpc(getApplicationContext());
+                }
+                JSONObject response = rpc.sendMessageSync("", new String[]{"can", "ratingslight", "setrating", "?"}, 5000);
+                JSONObject result = null==response ? null : response.optJSONObject("result");
+                supported = null!=result && 1 == result.optInt("_can", 0);
+            } catch (Exception e) {
+                Utils.debug("Failed to check for Ratings Light: " + e.getMessage());
+            }
+            boolean value = supported;
+            handler.post(() -> {
+                checkingRatingsSupport = false;
+                ratingsSupported = value;
+                if (value) {
+                    updateMediaSession();
+                }
+            });
+        });
+    }
+
+    private void clearQueue() {
+        if (null!=queuePlayer && null!=mediaSession) {
+            mediaSession.setQueue(null);
+        }
+        queuePlayer = null;
+        queueTimestamp = -1;
+        queueStart = -1;
+        queueTotal = 0;
+    }
+
+    // Reload the queue when the player or playlist changes, or the current track leaves the shown window.
+    private void updateQueue() {
+        final String player = lastStatus.id;
+        final int current = lastStatus.playlistIndex;
+        final double timestamp = lastStatus.playlistTimestamp;
+        if (current < 0) {
+            clearQueue();
+            return;
+        }
+        if (queueLoading || (player.equals(queuePlayer) && timestamp == queueTimestamp &&
+                PlayQueue.windowStart(current, queueTotal) == queueStart)) {
+            return;
+        }
+        queueLoading = true;
+        final int start = PlayQueue.windowStart(current, player.equals(queuePlayer) && timestamp == queueTimestamp ? queueTotal : Integer.MAX_VALUE);
+        getBrowseExecutor().execute(() -> {
+            List<MediaSessionCompat.QueueItem> items = null;
+            int total = 0;
+            int loadedStart = start;
+            try {
+                if (null==rpc) {
+                    rpc = new JsonRpc(getApplicationContext());
+                }
+                JSONObject response = rpc.sendMessageSync(player, new String[]{"status", Integer.toString(start),
+                        Integer.toString(PlayQueue.MAX_ITEMS), "tags:acdlKN"}, 10000);
+                JSONObject result = null==response ? null : response.optJSONObject("result");
+                if (null!=result) {
+                    total = result.optInt("playlist_tracks", 0);
+                    if (start > 0 && start != PlayQueue.windowStart(current, total)) {
+                        // First load of a large queue - fetch again now the size is known.
+                        loadedStart = PlayQueue.windowStart(current, total);
+                        response = rpc.sendMessageSync(player, new String[]{"status", Integer.toString(loadedStart),
+                                Integer.toString(PlayQueue.MAX_ITEMS), "tags:acdlKN"}, 10000);
+                        result = null==response ? null : response.optJSONObject("result");
+                    }
+                }
+                JSONArray loop = null==result ? null : result.optJSONArray("playlist_loop");
+                if (null!=loop) {
+                    String serverUrl = rpc.getServerUrl();
+                    items = new ArrayList<>();
+                    for (int i = 0; i < loop.length(); i++) {
+                        JSONObject track = loop.getJSONObject(i);
+                        long index = track.optLong("playlist index", loadedStart + i);
+                        String title = track.optString("title", "");
+                        String remoteTitle = track.optString("remote_title", "");
+                        if (!remoteTitle.isEmpty() && (title.isEmpty() || title.startsWith("http"))) {
+                            title = remoteTitle;
+                        }
+                        MediaDescriptionCompat.Builder desc = new MediaDescriptionCompat.Builder()
+                                .setMediaId("queue/" + index)
+                                .setTitle(title)
+                                .setSubtitle(track.optString("artist", ""));
+                        String coverId = track.optString("coverid", "");
+                        if (!coverId.isEmpty() && null!=serverUrl) {
+                            desc.setIconUri(ArtworkProvider.wrap(getApplicationContext(),
+                                    serverUrl + "/music/" + coverId + "/cover_300x300_f"));
+                        }
+                        items.add(new MediaSessionCompat.QueueItem(desc.build(), index));
+                    }
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to load play queue: " + e.getMessage());
+            }
+            final List<MediaSessionCompat.QueueItem> queue = items;
+            final int queueSize = total;
+            final int queueFrom = loadedStart;
+            handler.post(() -> {
+                queueLoading = false;
+                if (null==mediaSession || null==queue || !player.equals(MainActivity.activePlayer)) {
+                    return;
+                }
+                mediaSession.setQueue(queue);
+                mediaSession.setQueueTitle(getString(R.string.queue));
+                queuePlayer = player;
+                queueTimestamp = timestamp;
+                queueStart = queueFrom;
+                queueTotal = queueSize;
+                // Status may have moved on while loading (e.g. next track) - re-check.
+                if (null!=lastStatus && lastStatus.id.equals(player)) {
+                    updateQueue();
+                }
+            });
+        });
+    }
+
+    private void setRating(int stars) {
+        if (!canRate() || stars < 0 || stars > Ratings.MAX_STARS) {
+            return;
+        }
+        final String player = MainActivity.activePlayer;
+        sendCommand(new String[]{"ratingslight", "setrating", "track_id:" + lastStatus.trackId, "rating:" + stars});
+        // Show the new rating immediately, then re-read the status to pick up what the server stored.
+        lastStatus.rating = stars * 20;
+        updateMediaSession();
+        handler.postDelayed(() -> {
+            if (null!=cometClient && player.equals(MainActivity.activePlayer)) {
+                cometClient.getPlayerStatus(player);
+            }
+        }, RATING_REFRESH_MS);
     }
 
     private void networkConnectivityChanged() {
@@ -410,6 +635,7 @@ public class ControlService extends MediaBrowserServiceCompat {
                     .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, getFallback())
                     .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, getFallback())
                     .build());
+            clearQueue();
             return;
         }
         int state = "play".equals(lastStatus.mode) ? PlaybackStateCompat.STATE_PLAYING :
@@ -433,6 +659,10 @@ public class ControlService extends MediaBrowserServiceCompat {
             meta.putString(MediaMetadataCompat.METADATA_KEY_TITLE, lastStatus.title)
                     .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, lastStatus.title);
         }
+        checkRatingsSupport();
+        updateQueue();
+        // No star text here: Android Auto shows the same subtitle in Now Playing and the split-screen
+        // card, so the rating is shown only by the rating button's icon.
         if (!Utils.isEmpty(lastStatus.artist)) {
             meta.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, lastStatus.artist)
                     .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, lastStatus.artist);
@@ -552,12 +782,14 @@ public class ControlService extends MediaBrowserServiceCompat {
         mediaSession.setPlaybackState(playbackStateBuilder(
                 PlaybackStateCompat.STATE_NONE, 0, 0f).build());
         setSessionToken(mediaSession.getSessionToken());
+        PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).registerOnSharedPreferenceChangeListener(prefsListener);
         startForegroundService();
     }
 
     @Override
     public void onDestroy() {
         Utils.debug("");
+        PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).unregisterOnSharedPreferenceChangeListener(prefsListener);
         if (null!=connectionChangeListener) {
             unregisterReceiver(connectionChangeListener);
             connectionChangeListener = null;
@@ -570,6 +802,7 @@ public class ControlService extends MediaBrowserServiceCompat {
             browseExecutor = null;
         }
         cancelPlayerAvailabilityCheck();
+        handler.removeCallbacks(commandStatusRefresh);
         browseHelper = null;
         if (null!=mediaSession) {
             mediaSession.setActive(false);
@@ -593,6 +826,10 @@ public class ControlService extends MediaBrowserServiceCompat {
         if (null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
             cometClient.connect();
         }
+        // Don't rely only on the CometD push for the result: its streaming connection can go silent for
+        // up to a minute before being detected, leaving Android Auto showing a stale state.
+        handler.removeCallbacks(commandStatusRefresh);
+        handler.postDelayed(commandStatusRefresh, COMMAND_STATUS_REFRESH_MS);
     }
 
     @Override
@@ -640,6 +877,7 @@ public class ControlService extends MediaBrowserServiceCompat {
         if (Utils.isEmpty(MainActivity.activePlayer)) {
             MainActivity.activePlayer = prefs.getString(MainActivity.CURRENT_PLAYER_ID_KEY, null);
         }
+        applyPlayerRestriction();
         new LocalPlayer(prefs, getApplicationContext()).autoStart(false);
         String setting = prefs.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, NO_NOTIFICATION);
         notificationType = setting;
@@ -653,8 +891,44 @@ public class ControlService extends MediaBrowserServiceCompat {
         }
     }
 
+    // The active player was changed elsewhere (phone UI or Android Auto's player list) - follow it.
+    private void activePlayerChanged() {
+        String player = MainActivity.activePlayer;
+        if (null==cometClient || Utils.isEmpty(player)) {
+            return;
+        }
+        Utils.debug("Active player changed to " + player);
+        cancelPlayerAvailabilityCheck();
+        cometClient.setPlayer(player);
+        if (!cometClient.isConnected() && Utils.isNetworkConnected(this)) {
+            cometClient.connect();
+        }
+        updateMediaSession();
+        updateNotification();
+        notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+    }
+
+    private void applyPlayerRestriction() {
+        String restricted = restrictedPlayer();
+        if (null!=restricted && !restricted.equals(MainActivity.activePlayer)) {
+            // Don't control a previously used player; the availability check selects the default one.
+            MainActivity.activePlayer = null;
+            MainActivity.activePlayerName = null;
+            if (null!=cometClient) {
+                cometClient.setPlayer(null);
+            }
+        }
+    }
+
+    private String restrictedPlayer() {
+        if (null==prefs) {
+            prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        }
+        return PlayerAvailability.restrictedPlayer(prefs);
+    }
+
     private void startPlayerAvailabilityCheck() {
-        if (Utils.isEmpty(MainActivity.activePlayer)) {
+        if (Utils.isEmpty(MainActivity.activePlayer) && null==restrictedPlayer()) {
             return;
         }
         playerAvailabilityDeadline = SystemClock.elapsedRealtime() + PLAYER_AVAILABILITY_TIMEOUT_MS;
@@ -671,7 +945,8 @@ public class ControlService extends MediaBrowserServiceCompat {
 
     private void checkPlayerAvailability() {
         final String playerId = MainActivity.activePlayer;
-        if (Utils.isEmpty(playerId)) {
+        final String restricted = restrictedPlayer();
+        if (Utils.isEmpty(playerId) && null==restricted) {
             return;
         }
         getBrowseExecutor().execute(() -> {
@@ -683,31 +958,46 @@ public class ControlService extends MediaBrowserServiceCompat {
                 JSONObject response = rpc.sendMessageSync("", new String[]{"players", "0", "100"}, 3000);
                 JSONObject result = null==response ? null : response.optJSONObject("result");
                 JSONArray players = null==result ? null : result.optJSONArray("players_loop");
-                player = PlayerAvailability.findConnectedPlayer(players, playerId);
+                player = null==restricted
+                        ? PlayerAvailability.findConnectedPlayer(players, playerId)
+                        : PlayerAvailability.findConnectedAllowedPlayer(PlayerAvailability.parse(players), restricted);
             } catch (Exception e) {
                 Utils.debug("Failed to check player availability: " + e.getMessage());
             }
             PlayerAvailability.Player availablePlayer = player;
-            handler.post(() -> playerAvailabilityChecked(playerId, availablePlayer));
+            handler.post(() -> playerAvailabilityChecked(playerId, restricted, availablePlayer));
         });
     }
 
-    private void playerAvailabilityChecked(String playerId, PlayerAvailability.Player player) {
-        if (!playerId.equals(MainActivity.activePlayer)) {
+    private void playerAvailabilityChecked(String playerId, String restricted, PlayerAvailability.Player player) {
+        if (!Objects.equals(playerId, MainActivity.activePlayer) || !Objects.equals(restricted, restrictedPlayer())) {
             return;
         }
         if (player != null) {
+            boolean changed = !player.id.equals(MainActivity.activePlayer);
+            if (changed) {
+                Utils.debug("Selecting default player " + player.name + ", id:" + player.id);
+                MainActivity.activePlayer = player.id;
+                prefs.edit().putString(MainActivity.CURRENT_PLAYER_ID_KEY, player.id).apply();
+            }
             MainActivity.activePlayerName = player.name;
-            if (playerWasUnavailable) {
+            if (playerWasUnavailable || changed) {
                 cometClient.setPlayer(player.id);
                 cometClient.reconnect();
             }
             updateMediaSession();
+            if (changed) {
+                updateNotification();
+                notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+            }
             return;
         }
         playerWasUnavailable = true;
         if (SystemClock.elapsedRealtime() < playerAvailabilityDeadline) {
             handler.postDelayed(playerAvailabilityCheck, PLAYER_AVAILABILITY_RETRY_MS);
+        } else if (null!=restricted) {
+            // The default player may start (e.g. Squeezelite on car connect) at any time - keep looking.
+            handler.postDelayed(playerAvailabilityCheck, RESTRICTED_PLAYER_RETRY_MS);
         }
     }
 
