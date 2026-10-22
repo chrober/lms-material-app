@@ -761,8 +761,17 @@ public class MainActivity extends AppCompatActivity {
     @JavascriptInterface
     public void updatePlayer(String playerId, String playerName, String ip) {
         Utils.debug("Active player: "+playerId+", name: "+playerName+", ip:" + ip);
+        if (!PlayerAvailability.isAllowed(PlayerAvailability.restrictedPlayer(sharedPreferences), playerId, playerName)) {
+            Utils.debug("Ignoring non-default player " + playerId);
+            return;
+        }
         activePlayer = playerId;
         activePlayerName = playerName;
+        // Save straight away: ControlService watches this, so Android Auto follows the player even when
+        // this activity isn't bound to the service (it only binds when phone notifications are enabled).
+        if (null!=playerId && !playerId.equals(sharedPreferences.getString(CURRENT_PLAYER_ID_KEY, null))) {
+            sharedPreferences.edit().putString(CURRENT_PLAYER_ID_KEY, playerId).apply();
+        }
 
         interceptVolume = !sharedPreferences.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true) || !isLocalPlayer(ip);
         Utils.debug("interceptVolume:"+interceptVolume);

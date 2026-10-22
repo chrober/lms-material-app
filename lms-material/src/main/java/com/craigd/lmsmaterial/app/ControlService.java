@@ -73,6 +73,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -91,10 +92,12 @@ public class ControlService extends MediaBrowserServiceCompat {
     public static final int LIBRARY_CHANGED = 4;
     private static final String ACTION_POWER = "power";
     private static final String ACTION_QUIT = "quit";
+    private static final int COMMAND_STATUS_REFRESH_MS = 500;
     private static final int MSG_ID = 1;
     private static final int COVER_TIMEOUT_MS = 10000;
     private static final int PLAYER_AVAILABILITY_RETRY_MS = 1000;
     private static final int PLAYER_AVAILABILITY_TIMEOUT_MS = 15000;
+    private static final int RESTRICTED_PLAYER_RETRY_MS = 5000;
     private static final String[] PREV_COMMAND = {"button", "jump_rew"};
     private static final String[] PLAY_COMMAND = {"play"};
     private static final String[] PAUSE_COMMAND = {"pause", "1"};
@@ -143,6 +146,21 @@ public class ControlService extends MediaBrowserServiceCompat {
     private long playerAvailabilityDeadline;
     private boolean playerWasUnavailable;
     private final Runnable playerAvailabilityCheck = this::checkPlayerAvailability;
+    private final Runnable commandStatusRefresh = () -> {
+        if (null!=cometClient && !Utils.isEmpty(MainActivity.activePlayer)) {
+            cometClient.getPlayerStatus(MainActivity.activePlayer);
+        }
+    };
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefsListener = (sharedPreferences, key) -> {
+        if (MainActivity.CURRENT_PLAYER_ID_KEY.equals(key)) {
+            activePlayerChanged();
+        } else if (SettingsActivity.SINGLE_PLAYER_PREF_KEY.equals(key) || SettingsActivity.DEFAULT_PLAYER_PREF_KEY.equals(key)) {
+            applyPlayerRestriction();
+            startPlayerAvailabilityCheck();
+            updateNotification();
+            notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+        }
+    };
 
     private static class IncomingHandler extends Handler {
         private final WeakReference<ControlService> serviceRef;
@@ -161,6 +179,10 @@ public class ControlService extends MediaBrowserServiceCompat {
             if (msg.what == ACTIVE_PLAYER && null!=srv.notificationBuilder && null!=srv.notificationManager) {
                 String[] vals = (String[]) msg.obj;
                 Utils.debug("Set notification player name " + vals[1] + ", id:" + vals[0]);
+                if (!PlayerAvailability.isAllowed(srv.restrictedPlayer(), vals[0], vals[1])) {
+                    Utils.debug("Ignoring non-default player " + vals[0]);
+                    return;
+                }
                 srv.cancelPlayerAvailabilityCheck();
                 srv.notificationBuilder.setContentTitle(vals[1]);
                 if (null!=srv.cometClient) {
@@ -552,12 +574,14 @@ public class ControlService extends MediaBrowserServiceCompat {
         mediaSession.setPlaybackState(playbackStateBuilder(
                 PlaybackStateCompat.STATE_NONE, 0, 0f).build());
         setSessionToken(mediaSession.getSessionToken());
+        PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).registerOnSharedPreferenceChangeListener(prefsListener);
         startForegroundService();
     }
 
     @Override
     public void onDestroy() {
         Utils.debug("");
+        PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).unregisterOnSharedPreferenceChangeListener(prefsListener);
         if (null!=connectionChangeListener) {
             unregisterReceiver(connectionChangeListener);
             connectionChangeListener = null;
@@ -570,6 +594,7 @@ public class ControlService extends MediaBrowserServiceCompat {
             browseExecutor = null;
         }
         cancelPlayerAvailabilityCheck();
+        handler.removeCallbacks(commandStatusRefresh);
         browseHelper = null;
         if (null!=mediaSession) {
             mediaSession.setActive(false);
@@ -593,6 +618,10 @@ public class ControlService extends MediaBrowserServiceCompat {
         if (null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
             cometClient.connect();
         }
+        // Don't rely only on the CometD push for the result: its streaming connection can go silent for
+        // up to a minute before being detected, leaving Android Auto showing a stale state.
+        handler.removeCallbacks(commandStatusRefresh);
+        handler.postDelayed(commandStatusRefresh, COMMAND_STATUS_REFRESH_MS);
     }
 
     @Override
@@ -640,6 +669,7 @@ public class ControlService extends MediaBrowserServiceCompat {
         if (Utils.isEmpty(MainActivity.activePlayer)) {
             MainActivity.activePlayer = prefs.getString(MainActivity.CURRENT_PLAYER_ID_KEY, null);
         }
+        applyPlayerRestriction();
         new LocalPlayer(prefs, getApplicationContext()).autoStart(false);
         String setting = prefs.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, NO_NOTIFICATION);
         notificationType = setting;
@@ -653,8 +683,44 @@ public class ControlService extends MediaBrowserServiceCompat {
         }
     }
 
+    // The active player was changed elsewhere (phone UI or Android Auto's player list) - follow it.
+    private void activePlayerChanged() {
+        String player = MainActivity.activePlayer;
+        if (null==cometClient || Utils.isEmpty(player)) {
+            return;
+        }
+        Utils.debug("Active player changed to " + player);
+        cancelPlayerAvailabilityCheck();
+        cometClient.setPlayer(player);
+        if (!cometClient.isConnected() && Utils.isNetworkConnected(this)) {
+            cometClient.connect();
+        }
+        updateMediaSession();
+        updateNotification();
+        notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+    }
+
+    private void applyPlayerRestriction() {
+        String restricted = restrictedPlayer();
+        if (null!=restricted && !restricted.equals(MainActivity.activePlayer)) {
+            // Don't control a previously used player; the availability check selects the default one.
+            MainActivity.activePlayer = null;
+            MainActivity.activePlayerName = null;
+            if (null!=cometClient) {
+                cometClient.setPlayer(null);
+            }
+        }
+    }
+
+    private String restrictedPlayer() {
+        if (null==prefs) {
+            prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        }
+        return PlayerAvailability.restrictedPlayer(prefs);
+    }
+
     private void startPlayerAvailabilityCheck() {
-        if (Utils.isEmpty(MainActivity.activePlayer)) {
+        if (Utils.isEmpty(MainActivity.activePlayer) && null==restrictedPlayer()) {
             return;
         }
         playerAvailabilityDeadline = SystemClock.elapsedRealtime() + PLAYER_AVAILABILITY_TIMEOUT_MS;
@@ -671,7 +737,8 @@ public class ControlService extends MediaBrowserServiceCompat {
 
     private void checkPlayerAvailability() {
         final String playerId = MainActivity.activePlayer;
-        if (Utils.isEmpty(playerId)) {
+        final String restricted = restrictedPlayer();
+        if (Utils.isEmpty(playerId) && null==restricted) {
             return;
         }
         getBrowseExecutor().execute(() -> {
@@ -683,31 +750,46 @@ public class ControlService extends MediaBrowserServiceCompat {
                 JSONObject response = rpc.sendMessageSync("", new String[]{"players", "0", "100"}, 3000);
                 JSONObject result = null==response ? null : response.optJSONObject("result");
                 JSONArray players = null==result ? null : result.optJSONArray("players_loop");
-                player = PlayerAvailability.findConnectedPlayer(players, playerId);
+                player = null==restricted
+                        ? PlayerAvailability.findConnectedPlayer(players, playerId)
+                        : PlayerAvailability.findConnectedAllowedPlayer(PlayerAvailability.parse(players), restricted);
             } catch (Exception e) {
                 Utils.debug("Failed to check player availability: " + e.getMessage());
             }
             PlayerAvailability.Player availablePlayer = player;
-            handler.post(() -> playerAvailabilityChecked(playerId, availablePlayer));
+            handler.post(() -> playerAvailabilityChecked(playerId, restricted, availablePlayer));
         });
     }
 
-    private void playerAvailabilityChecked(String playerId, PlayerAvailability.Player player) {
-        if (!playerId.equals(MainActivity.activePlayer)) {
+    private void playerAvailabilityChecked(String playerId, String restricted, PlayerAvailability.Player player) {
+        if (!Objects.equals(playerId, MainActivity.activePlayer) || !Objects.equals(restricted, restrictedPlayer())) {
             return;
         }
         if (player != null) {
+            boolean changed = !player.id.equals(MainActivity.activePlayer);
+            if (changed) {
+                Utils.debug("Selecting default player " + player.name + ", id:" + player.id);
+                MainActivity.activePlayer = player.id;
+                prefs.edit().putString(MainActivity.CURRENT_PLAYER_ID_KEY, player.id).apply();
+            }
             MainActivity.activePlayerName = player.name;
-            if (playerWasUnavailable) {
+            if (playerWasUnavailable || changed) {
                 cometClient.setPlayer(player.id);
                 cometClient.reconnect();
             }
             updateMediaSession();
+            if (changed) {
+                updateNotification();
+                notifyChildrenChanged(LmsBrowseHelper.PLAYERS_ID);
+            }
             return;
         }
         playerWasUnavailable = true;
         if (SystemClock.elapsedRealtime() < playerAvailabilityDeadline) {
             handler.postDelayed(playerAvailabilityCheck, PLAYER_AVAILABILITY_RETRY_MS);
+        } else if (null!=restricted) {
+            // The default player may start (e.g. Squeezelite on car connect) at any time - keep looking.
+            handler.postDelayed(playerAvailabilityCheck, RESTRICTED_PLAYER_RETRY_MS);
         }
     }
 
