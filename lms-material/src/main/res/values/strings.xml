@@ -73,4 +73,17 @@
     <string name="added_to_clipboard">Added to clipboard.</string>
     <string name="share_now_playing">Share Now Playing</string>
     <string name="notif_size">Notification area size</string>
+    <string name="android_auto">Android Auto</string>
+    <string name="auto_tab_order">Tab order</string>
+    <string name="auto_tab_albums">Albums</string>
+    <string name="auto_tab_artists">Artists</string>
+    <string name="auto_tab_favorites">Favorites</string>
+    <string name="auto_tab_playlists">Playlists</string>
+    <string name="auto_tab_players">Players</string>
+    <string name="auto_tab_libraries">Libraries</string>
+    <string name="move_up">Move up</string>
+    <string name="move_down">Move down</string>
+    <string name="reset">Reset</string>
+    <string name="queue">Queue</string>
+    <string name="auto_album_click">When an album is selected</string>
 </resources>

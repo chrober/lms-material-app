@@ -26,11 +26,13 @@ public class PlayerStatus {
     public long time = 0;
     public boolean isPlaying = false;
     public int volume = -1;
+    public int playlistIndex = -1; // index of current track in the play queue, -1 if unknown/empty
+    public double playlistTimestamp = 0; // changes whenever the play queue is modified
 
     @NonNull
     @Override
     public String toString() {
-        return "id:"+id+", title:"+title+", artist:"+artist+", album:"+album+", cover:"+cover+", duration:"+Utils.timeStr(duration)+", time:"+Utils.timeStr(time)+", mode:"+mode+", isPlaying:"+isPlaying+", volume:"+volume;
+        return "id:"+id+", title:"+title+", artist:"+artist+", album:"+album+", cover:"+cover+", duration:"+Utils.timeStr(duration)+", time:"+Utils.timeStr(time)+", mode:"+mode+", isPlaying:"+isPlaying+", volume:"+volume+", playlistIndex:"+playlistIndex;
     }
 
     public String display() {
