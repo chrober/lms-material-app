@@ -2,8 +2,13 @@ package com.craigd.lmsmaterial.app;
 
 import android.app.Activity;
 import android.app.KeyguardManager;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.os.Looper;
 import android.view.View;
 import android.webkit.WebView;
 
@@ -19,6 +24,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.shadows.ShadowKeyguardManager;
+import org.robolectric.shadows.ShadowNetworkInfo;
 
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
@@ -27,6 +33,7 @@ import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -60,6 +67,39 @@ public class OfflineStartupTest {
             MainActivity activity = Robolectric.buildActivity(MainActivity.class).setup().get();
             assertEquals(View.GONE, activity.findViewById(R.id.webview).getVisibility());
             assertEquals(View.VISIBLE, activity.findViewById(R.id.progress).getVisibility());
+        }
+    }
+
+    @Test
+    public void activityReceiverCannotBeStartedAsAnExportedComponent() throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        ComponentName receiver = new ComponentName(context, MainActivity.ConnectionChangeListener.class);
+        try {
+            context.getPackageManager().getReceiverInfo(receiver, 0);
+            fail("Activity listener must not be declared as a manifest receiver");
+        } catch (PackageManager.NameNotFoundException expected) {
+        }
+    }
+
+    @Test
+    public void startsConfiguredServerWhenDefaultNetworkReturns() throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        ConnectivityManager connectivity = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        shadowOf(connectivity).setActiveNetworkInfo(null);
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+                .putString(SettingsActivity.SERVER_PREF_KEY, "{\"ip\":\"192.168.43.123\",\"port\":9000}")
+                .apply();
+        try (MockedStatic<NetworkInterface> interfaces = mockStatic(NetworkInterface.class)) {
+            interfaces.when(NetworkInterface::getNetworkInterfaces).thenReturn(Collections.emptyEnumeration());
+            MainActivity activity = Robolectric.buildActivity(MainActivity.class).setup().get();
+            assertEquals(View.VISIBLE, activity.findViewById(R.id.progress).getVisibility());
+            shadowOf(connectivity).setActiveNetworkInfo(ShadowNetworkInfo.newInstance(
+                    NetworkInfo.DetailedState.CONNECTED, ConnectivityManager.TYPE_WIFI, 0, true, true));
+            activity.sendBroadcast(new Intent(ConnectivityManager.CONNECTIVITY_ACTION));
+            shadowOf(Looper.getMainLooper()).idle();
+            WebView webView = activity.findViewById(R.id.webview);
+            assertEquals(View.VISIBLE, webView.getVisibility());
+            assertTrue(shadowOf(webView).getLastLoadedUrl().startsWith("http://192.168.43.123:9000/material/"));
         }
     }
 
