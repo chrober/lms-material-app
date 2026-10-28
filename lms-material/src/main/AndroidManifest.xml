@@ -90,6 +90,13 @@
             </intent-filter>
         </receiver>
         <receiver
+            android:name=".MainActivity$ConnectionChangeListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.net.conn.CONNECTIVITY_CHANGE" tools:ignore="BatteryLife" />
+            </intent-filter>
+        </receiver>
+        <receiver
             android:name=".ControlService$ConnectionChangeListener"
             android:exported="true">
             <intent-filter>
