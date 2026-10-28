@@ -375,10 +375,9 @@ public class ControlService extends MediaBrowserServiceCompat {
         resetBrowseHelper();
         if (Utils.isNetworkConnected(this)) {
             cometClient.setPlayer(MainActivity.activePlayer);
-            cometClient.connect();
-        } else {
-            lastStatus = null;
-            cometClient.disconnect();
+            if (!cometClient.isConnected()) {
+                cometClient.connect();
+            }
         }
         updateNotification();
     }
@@ -590,7 +589,7 @@ public class ControlService extends MediaBrowserServiceCompat {
             rpc = new JsonRpc(getApplicationContext());
         }
         rpc.sendMessage(MainActivity.activePlayer, command);
-        if (null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
+        if (null!=cometClient && !cometClient.isConnected()) {
             cometClient.connect();
         }
     }
