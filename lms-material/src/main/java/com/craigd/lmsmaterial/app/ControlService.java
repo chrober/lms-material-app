@@ -201,9 +201,10 @@ public class ControlService extends Service {
         if (FULL_NOTIFICATION.equals(notificationType)) {
             if (Utils.isNetworkConnected(this)) {
                 cometClient.setPlayer(MainActivity.activePlayer);
-                if (!cometClient.isConnected()) {
-                    cometClient.connect();
-                }
+                cometClient.connect();
+            } else {
+                lastStatus = null;
+                cometClient.disconnect();
             }
             updateNotification();
         }
@@ -260,7 +261,7 @@ public class ControlService extends Service {
             rpc = new JsonRpc(getApplicationContext());
         }
         rpc.sendMessage(MainActivity.activePlayer, command);
-        if (FULL_NOTIFICATION.equals(notificationType) && null!=cometClient && !cometClient.isConnected()) {
+        if (FULL_NOTIFICATION.equals(notificationType) && null!=cometClient && !cometClient.isConnected() && Utils.isNetworkConnected(this)) {
             cometClient.connect();
         }
     }

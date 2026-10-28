@@ -10,11 +10,13 @@ package com.craigd.lmsmaterial.app;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.KeyguardManager;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
@@ -24,6 +26,7 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Point;
+import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -109,6 +112,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean settingsShown = false;
     private boolean isFullScreen = false;
     private int currentScale = 0;
+    private ConnectionChangeListener connectionChangeListener;
     private double initialWebViewScale;
     private String onCall = null;
     private String notifications = null;
@@ -173,6 +177,22 @@ public class MainActivity extends AppCompatActivity {
                     pageError = false;
                     loadUrl(url);
                 }
+            }
+        }
+    }
+
+    // static class to keep lint happy...
+    public static class ConnectionChangeListener extends BroadcastReceiver {
+        private final MainActivity activity;
+
+        ConnectionChangeListener(MainActivity activity) {
+            this.activity = activity;
+        }
+
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (ConnectivityManager.CONNECTIVITY_ACTION.equals(intent.getAction()) && null!=activity) {
+                activity.runOnUiThread(activity::checkNetworkConnection);
             }
         }
     }
@@ -685,29 +705,44 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient() {
         });
 
-        connectToServer();
+        checkNetworkConnection();
         handleIntent(getIntent());
         clearShared();
     }
 
-    private void connectToServer() {
+    private void checkNetworkConnection() {
+        Utils.debug("Check network connection");
         View progress = findViewById(R.id.progress);
-        webView.setVisibility(View.VISIBLE);
-        progress.setVisibility(View.GONE);
+        if (Utils.isNetworkConnected(this)) {
+            Utils.debug("Connected");
+            webView.setVisibility(View.VISIBLE);
 
-        // The phone's hotspot can reach a local server without a default network.
-        url = getConfiguredUrl();
-        if (url == null) {
-            // No previous server, so try to find
-            discoverServer(true);
-        } else {
-            // Try to connect to previous server
-            Utils.info("URL:" + url);
-            StyleableToast.makeText(getApplicationContext(),
-                    new Discovery.Server(PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getString(SettingsActivity.SERVER_PREF_KEY, null)).describe(),
-                    Toast.LENGTH_SHORT, R.style.toast).show();
+            if (connectionChangeListener != null) {
+                unregisterReceiver(connectionChangeListener);
+                connectionChangeListener = null;
+            }
+            progress.setVisibility(View.GONE);
 
-            loadUrl(url);
+            url = getConfiguredUrl();
+            if (url == null) {
+                // No previous server, so try to find
+                discoverServer(true);
+            } else {
+                // Try to connect to previous server
+                Utils.info("URL:" + url);
+                StyleableToast.makeText(getApplicationContext(),
+                        new Discovery.Server(PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getString(SettingsActivity.SERVER_PREF_KEY, null)).describe(),
+                        Toast.LENGTH_SHORT, R.style.toast).show();
+
+                loadUrl(url);
+            }
+        } else if (connectionChangeListener==null) {
+            Utils.debug("Not connected");
+            // No network connection, show progress spinner until we are connected
+            webView.setVisibility(View.GONE);
+            progress.setVisibility(View.VISIBLE);
+            connectionChangeListener = new ConnectionChangeListener(this);
+            registerReceiver(connectionChangeListener, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
         }
     }
 
