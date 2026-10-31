@@ -142,6 +142,29 @@
 
     <PreferenceCategory
         app:iconSpaceReserved="false"
+        app:title="@string/android_auto">
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="auto_tab_order"
+            app:title="@string/auto_tab_order" />
+        <ListPreference
+            android:defaultValue="tracks"
+            android:entries="@array/autoAlbumClick"
+            android:entryValues="@array/autoAlbumClickAlias"
+            android:key="auto_album_click"
+            android:title="@string/auto_album_click"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="auto_ignore_connect_play"
+            app:summary="@string/auto_ignore_connect_play_summary"
+            app:title="@string/auto_ignore_connect_play" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
         app:title="@string/advanced">
         <Preference
             app:iconSpaceReserved="false"

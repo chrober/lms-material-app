@@ -27,6 +27,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Point;
 import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -103,6 +104,10 @@ public class MainActivity extends AppCompatActivity {
     private static final int PAGE_TIMEOUT = 5000; // ms
     private static final int DISCONNECT_TIMEOUT = 6; // seconds
     private static final int DISCONNECT_TIMEOUT_WITHOUT_NETWORK = 10; // seconds
+    // After this long in the background, or after the network changed meanwhile, the page is reloaded: the web UI
+    // can keep showing a stale player, e.g. its progress clock still running hours after the player was forgotten
+    // by LMS, or an empty queue after moving from Wi-Fi to mobile data.
+    private static final long RELOAD_AFTER_BACKGROUND_MS = 30 * 60 * 1000;
 
     private SharedPreferences sharedPreferences;
     private WebView webView;
@@ -121,6 +126,8 @@ public class MainActivity extends AppCompatActivity {
     public static boolean isDark = true;
     private boolean pageLoaded = false;
     private long recreateTime = 0;
+    private long pauseTime = 0;
+    private Network pauseNetwork = null;
     private LocalPlayer localPlayer;
     private boolean interceptVolume = true;
 
@@ -761,29 +768,21 @@ public class MainActivity extends AppCompatActivity {
     @JavascriptInterface
     public void updatePlayer(String playerId, String playerName, String ip) {
         Utils.debug("Active player: "+playerId+", name: "+playerName+", ip:" + ip);
+        if (!PlayerAvailability.isAllowed(PlayerAvailability.restrictedPlayer(sharedPreferences), playerId, playerName)) {
+            Utils.debug("Ignoring non-default player " + playerId);
+            return;
+        }
         activePlayer = playerId;
         activePlayerName = playerName;
+        // Save straight away: ControlService watches this, so Android Auto follows the player even when
+        // this activity isn't bound to the service (it only binds when phone notifications are enabled).
+        if (null!=playerId && !playerId.equals(sharedPreferences.getString(CURRENT_PLAYER_ID_KEY, null))) {
+            sharedPreferences.edit().putString(CURRENT_PLAYER_ID_KEY, playerId).apply();
+        }
 
         interceptVolume = !sharedPreferences.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true) || !isLocalPlayer(ip);
         Utils.debug("interceptVolume:"+interceptVolume);
         sendMessageToService(ControlService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
-    }
-
-    @JavascriptInterface
-    public void updateLibrary(String libraryId) {
-        String current = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
-        String updated = Utils.isEmpty(libraryId) || "-1".equals(libraryId) ? null : libraryId;
-        if ((null==current && null==updated) || (null!=current && current.equals(updated))) {
-            return;
-        }
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-        if (null==updated) {
-            editor.remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY);
-        } else {
-            editor.putString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, updated);
-        }
-        editor.apply();
-        sendMessageToService(ControlService.LIBRARY_CHANGED, null);
     }
 
     public static Set<String> getLocalIpAddresses() {
@@ -881,9 +880,6 @@ public class MainActivity extends AppCompatActivity {
             if (ControlService.isActive()) {
                 refreshControlService();
             }
-            runOnUiThread(() -> webView.evaluateJavascript(
-                    "try { NativeReceiver.updateLibrary(localStorage.getItem('lms-material::library') || '-1'); } catch(e) {}",
-                    null));
         } else {
             startDisconnectTimer();
         }
@@ -993,6 +989,8 @@ public class MainActivity extends AppCompatActivity {
         Utils.info("");
         webView.onPause();
         webView.pauseTimers();
+        pauseTime = SystemClock.elapsedRealtime();
+        pauseNetwork = activeNetwork();
         super.onPause();
         isCurrentActivity = false;
     }
@@ -1047,6 +1045,14 @@ public class MainActivity extends AppCompatActivity {
         if (!settingsShown) {
             if (pageLoaded) {
                 localPlayer.autoStart(true);
+                Network network = activeNetwork();
+                boolean networkChanged = null!=pauseNetwork && null!=network && !pauseNetwork.equals(network);
+                if (pauseTime>0 && (networkChanged || SystemClock.elapsedRealtime()-pauseTime>RELOAD_AFTER_BACKGROUND_MS)) {
+                    Utils.info("Reload URL after " + ((SystemClock.elapsedRealtime()-pauseTime)/60000) + " minutes in the background" +
+                               (networkChanged ? ", network changed" : ""));
+                    pageError = false;
+                    webView.reload();
+                }
             }
             if (!ControlService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION)) && Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID)) {
                 if (!ControlService.isActive()) {
@@ -1110,6 +1116,11 @@ public class MainActivity extends AppCompatActivity {
         notifications = notificationsNow;
         manageShowOverLockscreen();
         reloadUrlAfterSettings=false;
+    }
+
+    private Network activeNetwork() {
+        ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        return null==connectivityManager ? null : connectivityManager.getActiveNetwork();
     }
 
     @Override

@@ -24,6 +24,7 @@
     <string name="cancel">Cancel</string>
     <string name="quit">Quit</string>
     <string name="power">Power</string>
+    <string name="player_off">Player is OFF</string>
     <string name="keep_screen_on">Keep screen on</string>
     <string name="keep_screen_on_summary">Keep screen on whilst in use.</string>
     <string name="oncall">During phone call</string>
@@ -40,6 +41,7 @@
     <string name="advanced">Advanced</string>
     <string name="default_player">Default player</string>
     <string name="default_player_summary">Set name, or ID, of default player.</string>
+    <string name="use_current_player">Use current player (%1$s)</string>
     <string name="single_player">Only control default</string>
     <string name="single_player_summary">Only show, and control, the default player (as configured above).</string>
     <string name="url_handler_label">Choose player and action</string>
@@ -73,4 +75,20 @@
     <string name="added_to_clipboard">Added to clipboard.</string>
     <string name="share_now_playing">Share Now Playing</string>
     <string name="notif_size">Notification area size</string>
+    <string name="android_auto">Android Auto</string>
+    <string name="auto_tab_order">Tab order</string>
+    <string name="auto_tab_albums">Albums</string>
+    <string name="auto_tab_artists">Artists</string>
+    <string name="auto_tab_favorites">Favorites</string>
+    <string name="auto_tab_playlists">Playlists</string>
+    <string name="auto_tab_players">Players</string>
+    <string name="auto_tab_libraries">Libraries</string>
+    <string name="move_up">Move up</string>
+    <string name="move_down">Move down</string>
+    <string name="reset">Reset</string>
+    <string name="rating">Rating</string>
+    <string name="queue">Queue</string>
+    <string name="auto_album_click">When an album is selected</string>
+    <string name="auto_ignore_connect_play">Ignore the car\'s play on connect</string>
+    <string name="auto_ignore_connect_play_summary">Some cars send play a few seconds after connecting, which starts music even with Android Auto\'s \'Start music automatically\' off. Ignore a play from Android Auto in the first 15 seconds after the car connects.</string>
 </resources>
