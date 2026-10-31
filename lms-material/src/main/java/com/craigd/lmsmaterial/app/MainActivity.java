@@ -71,6 +71,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.preference.PreferenceManager;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -528,6 +529,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
+        sharedPreferences.registerOnSharedPreferenceChangeListener(libraryPrefListener);
         localPlayer = new LocalPlayer(sharedPreferences, this);
         setTheme();
         setDefaults();
@@ -603,6 +605,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 readVolumeStep();
+                startLibrarySync();
             }
 
             @Override
@@ -995,6 +998,88 @@ public class MainActivity extends AppCompatActivity {
         isCurrentActivity = false;
     }
 
+    /*
+     * The phone UI and Android Auto use the same library. The shared value is the "active_library" pref
+     * (null = All). The phone UI (Material skin) keeps its own copy in localStorage:
+     * - on page load the pref is written into the skin, never the other way round: a reload (after a network
+     *   change, or 30 minutes in the background) must not switch Android Auto to whatever the page had;
+     * - a library picked in the phone UI (the skin's "libraryChanged" event, only sent on a real change) is
+     *   written to the pref, and ControlService switches Android Auto to it;
+     * - a library picked in Android Auto changes the pref, which is pushed into the skin while this activity
+     *   exists, else on the next page load.
+     * A library LMS doesn't know (removed or rebuilt) falls back to All, checked on page load here and on car
+     * connect in ControlService.
+     */
+    private static final String LIBRARY_SYNC_JS =
+            "(function(){var n=0;function hook(){" +
+            "if(typeof bus==='undefined'||!bus.$store){if(++n<40)setTimeout(hook,250);return;}" +
+            "var id=NativeReceiver.currentLibrary();if(''+bus.$store.state.library!==id)bus.$store.commit('setLibrary',id);" +
+            "if(window.arLibrarySync)return;window.arLibrarySync=true;" +
+            "bus.$on('libraryChanged',function(){try{NativeReceiver.libraryChanged(''+bus.$store.state.library);}catch(e){}});" +
+            "}hook();})()";
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener libraryPrefListener = (prefs, key) -> {
+        if (LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY.equals(key)) {
+            runOnUiThread(this::pushLibraryToPage);
+        }
+    };
+
+    private void startLibrarySync() {
+        if (null==webView) {
+            return;
+        }
+        // Waits for the skin's store, writes the pref into it (before hooking the event, so no echo), then hooks.
+        webView.evaluateJavascript(LIBRARY_SYNC_JS, null);
+        executorService.execute(this::checkLibraryKnown);
+    }
+
+    /** The shared library in the skin's form: "-1" for All. Only [A-Za-z0-9_.-] (normalizeLibraryId). */
+    @JavascriptInterface
+    public String currentLibrary() {
+        String lib = LmsBrowseHelper.normalizeLibraryId(sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null));
+        return null==lib ? "-1" : lib;
+    }
+
+    private void pushLibraryToPage() {
+        if (null==webView || !pageLoaded) {
+            return;
+        }
+        // Safe to put into the script as is (see currentLibrary). The skin's setLibrary does nothing if it already
+        // has this library.
+        String id = currentLibrary();
+        webView.evaluateJavascript("(function(){try{if(typeof bus!=='undefined'&&bus.$store&&''+bus.$store.state.library!=='" + id +
+                "'){bus.$store.commit('setLibrary','" + id + "');}}catch(e){}})()", null);
+    }
+
+    @JavascriptInterface
+    public void libraryChanged(String libraryId) {
+        String lib = LmsBrowseHelper.normalizeLibraryId(libraryId);
+        String current = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
+        if (null==lib ? null==current : lib.equals(current)) {
+            return;
+        }
+        Utils.debug("Library from the phone UI: " + libraryId);
+        if (null==lib) {
+            sharedPreferences.edit().remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY).apply();
+        } else {
+            sharedPreferences.edit().putString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, lib).apply();
+        }
+    }
+
+    /** Fall back to All if LMS no longer has the library. Left alone if LMS can't be asked. */
+    private void checkLibraryKnown() {
+        String lib = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
+        if (null==lib) {
+            return;
+        }
+        JSONArray libraries = LmsBrowseHelper.fetchLibraries(new JsonRpc(getApplicationContext()));
+        if (null!=libraries && !LmsBrowseHelper.isKnownLibrary(libraries, lib) &&
+                lib.equals(sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null))) {
+            Utils.debug("Unknown library " + lib + ", selecting all");
+            sharedPreferences.edit().remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY).apply();
+        }
+    }
+
     private void readVolumeStep() {
         webView.evaluateJavascript("javascript:localStorage.getItem('lms-material::volumeStep')", new ValueCallback<String>() {
             @Override
@@ -1178,6 +1263,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         Utils.info("");
+        sharedPreferences.unregisterOnSharedPreferenceChangeListener(libraryPrefListener);
         webView.destroy();
         webView = null;
         stopControlService();

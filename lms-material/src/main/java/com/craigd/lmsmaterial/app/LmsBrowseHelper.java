@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaDescriptionCompat;
 
@@ -23,12 +24,20 @@ import org.json.JSONObject;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 public class LmsBrowseHelper {
     public static final String ACTIVE_LIBRARY_PREF_KEY = "active_library";
@@ -41,15 +50,25 @@ public class LmsBrowseHelper {
     public static final String ALBUMS_NEW_ID = "__ALBUMS_NEW__";
     public static final String ALBUMS_RANDOM_ID = "__ALBUMS_RANDOM__";
     public static final String ALBUMS_RECENTLY_PLAYED_ID = "__ALBUMS_RECENTLY_PLAYED__";
+    public static final String ALBUMS_REDISCOVER_ID = "__ALBUMS_REDISCOVER__";
+    public static final String ALBUMS_UNPLAYED_ID = "__ALBUMS_UNPLAYED__";
     public static final String ALBUMS_ALPHA_ID = "__ALBUMS_ALPHA__";
     public static final String ALBUMS_BY_YEAR_ID = "__ALBUMS_BY_YEAR__";
     public static final String FAVORITES_ID = "__FAVORITES__";
     public static final String PLAYLISTS_ID = "__PLAYLISTS__";
     public static final String PLAYERS_ID = "__PLAYERS__";
     public static final String LIBRARIES_ID = "__LIBRARIES__";
+    public static final String COPY_QUEUE_ID = "__COPY_QUEUE__";
+    public static final String SHOW_UNPLAYED_PREF_KEY = "auto_show_unplayed";
+    public static final String REDISCOVER_MONTHS_PREF_KEY = "auto_rediscover_months";
+    private static final String DEFAULT_REDISCOVER_MONTHS = "12";
+    private static final String COPY_QUEUE_PREFIX = "copyqueue/"; // + ID of the player to copy the queue from
     public static final String ALBUM_CLICK_PREF_KEY = "auto_album_click";
     public static final String ALBUM_CLICK_TRACKS = "tracks";
     public static final String ALBUM_CLICK_PLAY = "play";
+    // "Add to queue" row in an album's or playlist's track list (+ "album/<id>" or "playlist/<id>"). A row rather
+    // than a custom browse action: Android Auto (17.9) gives the app none.
+    private static final String QUEUE_ADD_PREFIX = "queueadd/";
     private static final String ALBUM_TRACK_PREFIX = "albumtrack/";
     private static final String LETTERS_PREFIX = "letters/"; // + A-Z list ID: pick a letter of that list
     private static final String ALL_LIBRARIES_ID = "-1"; // LMS: no library restriction
@@ -64,6 +83,10 @@ public class LmsBrowseHelper {
     private static final int SEARCH_LIMIT = 50;
     private static final int TIMEOUT_MS = 15000;
     private static final int INDEX_TIMEOUT_MS = 45000;
+    private static final int REDISCOVER_PAGE_SIZE = 100;
+    // Unplayed Albums needs play counts, from one query over all tracks (~4MB for 55k tracks), so they are cached.
+    private static final long PLAY_COUNTS_MAX_AGE_MS = 24 * 60 * 60 * 1000L;
+    private static final int PLAY_COUNTS_TRACK_LIMIT = 200000;
 
     private static final String LABEL_TOKENS = "BROWSE_BY_ARTIST,BROWSE_BY_ALBUMARTIST,BROWSE_BY_ALL_ARTISTS,BROWSE_BY_ALBUM,BROWSE_NEW_MUSIC,FAVORITES,SAVED_PLAYLISTS,PLAYERS,PLUGIN_MATERIAL_SKIN_NEW_ARTISTS,PLUGIN_MATERIAL_SKIN_RANDOM_MIX,ARTISTS,ALBUMS,SONGS,LIBRARY,MORE,YEAR";
 
@@ -77,6 +100,11 @@ public class LmsBrowseHelper {
     private List<GroupIndex> allArtistIndex = null;
     private List<GroupIndex> albumsAlphaIndex = null;
     private volatile AlbumTracks lastAlbumTracks = null;
+    // Rediscover / Unplayed Albums, built once a day (per library and setting), in an order fixed for the day
+    private final Map<String, DailyList> dailyLists = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object playCountsLock = new Object();
+    private final Object dailyListsLock = new Object();
+    private UnplayedAlbums unplayedAlbums = null;
 
     private static final String[] RELEASE_TYPE_ORDER = {"ALBUM", "EP", "BOXSET", "BESTOF", "COMPILATION", "SINGLE", "APPEARANCE"};
 
@@ -87,6 +115,18 @@ public class LmsBrowseHelper {
         AlbumTracks(String albumId, List<String> trackIds) {
             this.albumId = albumId;
             this.trackIds = trackIds;
+        }
+    }
+
+    private static class UnplayedAlbums {
+        final String libraryId;
+        final long time;
+        final List<String> ids;
+
+        UnplayedAlbums(String libraryId, long time, List<String> ids) {
+            this.libraryId = libraryId;
+            this.time = time;
+            this.ids = ids;
         }
     }
 
@@ -116,6 +156,10 @@ public class LmsBrowseHelper {
         allArtistIndex = null;
         albumsAlphaIndex = null;
         lastAlbumTracks = null;
+        dailyLists.clear();
+        synchronized (playCountsLock) {
+            unplayedAlbums = null;
+        }
     }
 
     private boolean shouldGroupByReleaseType() {
@@ -171,6 +215,8 @@ public class LmsBrowseHelper {
         labels.put("NEW_ARTISTS", "New Artists");
         labels.put("RANDOM_ALBUMS", "Random Albums");
         labels.put("RECENTLY_PLAYED_ALBUMS", "Recently Played Albums");
+        labels.put("REDISCOVER_ALBUMS", context.getString(R.string.rediscover_albums));
+        labels.put("UNPLAYED_ALBUMS", context.getString(R.string.unplayed_albums));
         labels.put("ARTISTS", "Artists");
         labels.put("ALBUMS", "Albums");
         labels.put("SONGS", "Songs");
@@ -255,6 +301,10 @@ public class LmsBrowseHelper {
             return loadAlbums("sort:random", parseOffset(parentMediaId, ALBUMS_RANDOM_ID));
         } else if (ALBUMS_RECENTLY_PLAYED_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_RECENTLY_PLAYED_ID + "/")) {
             return loadAlbums("sort:recentlyplayed", parseOffset(parentMediaId, ALBUMS_RECENTLY_PLAYED_ID));
+        } else if (ALBUMS_REDISCOVER_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_REDISCOVER_ID + "/")) {
+            return loadShuffledAlbums(ALBUMS_REDISCOVER_ID, parseOffset(parentMediaId, ALBUMS_REDISCOVER_ID));
+        } else if (ALBUMS_UNPLAYED_ID.equals(parentMediaId) || parentMediaId.startsWith(ALBUMS_UNPLAYED_ID + "/")) {
+            return loadShuffledAlbums(ALBUMS_UNPLAYED_ID, parseOffset(parentMediaId, ALBUMS_UNPLAYED_ID));
         } else if (FAVORITES_ID.equals(parentMediaId)) {
             return loadFavorites();
         } else if (PLAYLISTS_ID.equals(parentMediaId)) {
@@ -263,6 +313,8 @@ public class LmsBrowseHelper {
             return loadPlayers();
         } else if (LIBRARIES_ID.equals(parentMediaId)) {
             return loadLibraries();
+        } else if (COPY_QUEUE_ID.equals(parentMediaId)) {
+            return loadCopyQueueSources();
         } else if (parentMediaId.startsWith("artist/")) {
             return loadArtistAlbums(parentMediaId.substring(7));
         } else if (parentMediaId.startsWith("album/")) {
@@ -318,6 +370,9 @@ public class LmsBrowseHelper {
                     items.add(buildBrowsableItem(LIBRARIES_ID, label, drawableUri(R.drawable.ic_library)));
                     break;
                 }
+                case AutoTabOrder.COPY_QUEUE:
+                    items.add(buildBrowsableItem(COPY_QUEUE_ID, context.getString(R.string.auto_tab_copy_queue), drawableUri(R.drawable.ic_copy_queue)));
+                    break;
             }
         }
         return items;
@@ -338,6 +393,10 @@ public class LmsBrowseHelper {
         items.add(buildBrowsableItem(ALBUMS_NEW_ID, getLabel("BROWSE_NEW_MUSIC"), drawableUri(R.drawable.ic_new_releases)));
         items.add(buildBrowsableItem(ALBUMS_RANDOM_ID, getLabel("RANDOM_ALBUMS"), drawableUri(R.drawable.ic_dice_release)));
         items.add(buildBrowsableItem(ALBUMS_RECENTLY_PLAYED_ID, getLabel("RECENTLY_PLAYED_ALBUMS"), drawableUri(R.drawable.ic_history)));
+        items.add(buildBrowsableItem(ALBUMS_REDISCOVER_ID, getLabel("REDISCOVER_ALBUMS"), drawableUri(R.drawable.ic_rediscover)));
+        if (showUnplayed()) {
+            items.add(buildBrowsableItem(ALBUMS_UNPLAYED_ID, getLabel("UNPLAYED_ALBUMS"), drawableUri(R.drawable.ic_unplayed)));
+        }
         items.add(buildBrowsableItem(ALBUMS_ALPHA_ID, getLabel("BROWSE_BY_ALBUM") + " (A-Z)", drawableUri(R.drawable.ic_release)));
         items.add(buildBrowsableItem(ALBUMS_BY_YEAR_ID, getLabel("BROWSE_BY_ALBUM") + " (" + getLabel("YEAR") + ")", drawableUri(R.drawable.ic_release)));
         return items;
@@ -696,16 +755,7 @@ public class LmsBrowseHelper {
             if (null==loop) return items;
 
             for (int i = 0; i < loop.length(); i++) {
-                JSONObject album = loop.getJSONObject(i);
-                String id = album.optString("id", "");
-                String title = album.optString("album", "");
-                String artist = album.optString("artist", "");
-                int year = album.optInt("year", 0);
-                if (year > 0) {
-                    title = title + " (" + year + ")";
-                }
-                Uri artUri = albumArtUri(album);
-                items.add(buildAlbumItem(id, title, artist, artUri));
+                items.add(buildAlbumItem(loop.getJSONObject(i)));
             }
 
             String baseId = "sort:new".equals(sortParam) ? ALBUMS_NEW_ID
@@ -721,6 +771,238 @@ public class LmsBrowseHelper {
             Utils.error("Failed to load albums", e);
         }
         return items;
+    }
+
+    // An album from an "albums" query with tags ajlsy.
+    private MediaBrowserCompat.MediaItem buildAlbumItem(JSONObject album) {
+        String title = album.optString("album", "");
+        int year = album.optInt("year", 0);
+        if (year > 0) {
+            title = title + " (" + year + ")";
+        }
+        return buildAlbumItem(album.optString("id", ""), title, album.optString("artist", ""), albumArtUri(album));
+    }
+
+    private static final class DailyList {
+        final String key;
+        final List<String> ids;
+
+        DailyList(String key, List<String> ids) {
+            this.key = key;
+            this.ids = ids;
+        }
+    }
+
+    /**
+     * Rediscover Albums (all albums, played or not, without a play in the last N months, from LMS's per-track last
+     * played time) or Unplayed Albums (no plays), in random order. Built once a day, like the order: unlike Random,
+     * the list stays the same through the day (and app restarts), and its "More" pages follow that order.
+     */
+    private List<MediaBrowserCompat.MediaItem> loadShuffledAlbums(String listId, int offset) {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            List<String> ids = dailyListIds(listId);
+            if (null==ids || offset >= ids.size()) return items;
+            List<String> page = ids.subList(offset, Math.min(offset + REDISCOVER_PAGE_SIZE, ids.size()));
+            List<String> params = new ArrayList<>(Arrays.asList("albums", "0", String.valueOf(page.size()),
+                    "album_id:" + String.join(",", page), "tags:ajlsy"));
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+            JSONObject result = null==resp ? null : resp.optJSONObject("result");
+            JSONArray loop = null==result ? null : result.optJSONArray("albums_loop");
+            if (null==loop) return items;
+            // LMS returns them sorted by name: put them back in the shuffled order.
+            Map<String, JSONObject> byId = new HashMap<>();
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject album = loop.getJSONObject(i);
+                byId.put(album.optString("id", ""), album);
+            }
+            for (String id : page) {
+                JSONObject album = byId.get(id);
+                if (null!=album) {
+                    items.add(buildAlbumItem(album));
+                }
+            }
+            int nextOffset = offset + REDISCOVER_PAGE_SIZE;
+            if (nextOffset < ids.size()) {
+                items.add(buildBrowsableItem(listId + "/" + nextOffset,
+                        "► " + getLabel("MORE") + " (" + nextOffset + "/" + ids.size() + ")", null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load " + listId, e);
+        }
+        return items;
+    }
+
+    // Today's album IDs of Rediscover or Unplayed Albums (built if needed), or null. Its own lock: built either here
+    // for the list being opened, or in the background on car connect (prefetchDailyLists), never both at once.
+    private List<String> dailyListIds(String listId) throws Exception {
+        synchronized (dailyListsLock) {
+            String day = String.format(Locale.US, "%tF", new Date());
+            int months = rediscoverMonths();
+            String key = listId + "|" + getLibraryId() + "|" + months + "|" + day;
+            DailyList list = dailyLists.get(listId);
+            if (null!=list && key.equals(list.key)) {
+                return list.ids;
+            }
+            List<String> source;
+            if (ALBUMS_UNPLAYED_ID.equals(listId)) {
+                source = unplayedAlbumIds();
+            } else {
+                Set<String> played = albumsPlayedSince(months);
+                source = null==played ? null : albumIds(null, BROWSE_LIMIT);
+                if (null!=source) {
+                    source.removeAll(played);
+                }
+            }
+            if (null==source) return null;
+            list = new DailyList(key, dailyOrder(source, day));
+            dailyLists.put(listId, list);
+            Utils.debug(listId + ": " + list.ids.size() + " albums");
+            return list.ids;
+        }
+    }
+
+    /**
+     * Build today's Rediscover (and Unplayed) Albums in the background, e.g. on car connect: on cellular the queries
+     * take a few seconds, which would otherwise hold up the first opening of the list (and other lists behind it).
+     */
+    public void prefetchDailyLists() {
+        new Thread(() -> {
+            try {
+                dailyListIds(ALBUMS_REDISCOVER_ID);
+                if (showUnplayed()) {
+                    dailyListIds(ALBUMS_UNPLAYED_ID);
+                }
+            } catch (Exception e) {
+                Utils.error("Failed to prefetch the daily album lists", e);
+            }
+        }, "DailyLists").start();
+    }
+
+    private int rediscoverMonths() {
+        try {
+            return Integer.parseInt(prefs.getString(REDISCOVER_MONTHS_PREF_KEY, DEFAULT_REDISCOVER_MONTHS));
+        } catch (NumberFormatException e) {
+            return Integer.parseInt(DEFAULT_REDISCOVER_MONTHS);
+        }
+    }
+
+    /**
+     * The order of a daily list: random, the same all day, and an album dropping out (or added) doesn't reorder the
+     * others. Each ID is ranked by a hash of the day and the ID.
+     */
+    static List<String> dailyOrder(Collection<String> ids, String day) {
+        long seed = day.hashCode();
+        List<String> ordered = new ArrayList<>(ids);
+        ordered.sort(Comparator.comparingLong((String id) -> mix64(seed * 1000003L + id.hashCode())).thenComparing(id -> id));
+        return ordered;
+    }
+
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdL;
+        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53L;
+        return z ^ (z >>> 33);
+    }
+
+    /**
+     * The active library's albums with a track played in the last months, or null. LMS keeps each track's last play
+     * time (tracks_persistent.lastplayed) but has no query tag returning it, so it's used as a raw SQL condition;
+     * play data is only joined when the condition mentions playcount.
+     */
+    private Set<String> albumsPlayedSince(int months) {
+        Calendar since = Calendar.getInstance();
+        since.add(Calendar.MONTH, -months);
+        try {
+            List<String> params = new ArrayList<>(Arrays.asList("titles", "0", String.valueOf(PLAY_COUNTS_TRACK_LIMIT),
+                    "search:sql=tracks_persistent.playcount > 0 AND tracks_persistent.lastplayed > " + since.getTimeInMillis() / 1000,
+                    "tags:e"));
+            addLibraryParam(params);
+            JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
+            JSONObject result = null==resp ? null : resp.optJSONObject("result");
+            if (null==result) return null;
+            JSONArray loop = result.optJSONArray("titles_loop");
+            Set<String> albums = new HashSet<>();
+            for (int i = 0; null!=loop && i < loop.length(); i++) {
+                String album = loop.getJSONObject(i).optString("album_id", "");
+                if (!album.isEmpty()) {
+                    albums.add(album);
+                }
+            }
+            Utils.debug("Played in the last " + months + " months: " + (null==loop ? 0 : loop.length()) + " tracks, " + albums.size() + " albums");
+            return albums;
+        } catch (Exception e) {
+            Utils.error("Failed to fetch recently played albums", e);
+            return null;
+        }
+    }
+
+    // IDs of the active library's albums, in the given sort order; tags:x keeps the reply small (~120 bytes per album).
+    private List<String> albumIds(String sortParam, int count) throws Exception {
+        List<String> params = new ArrayList<>(Arrays.asList("albums", "0", String.valueOf(count), "tags:x"));
+        if (null!=sortParam) {
+            params.add(sortParam);
+        }
+        addLibraryParam(params);
+        JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), TIMEOUT_MS);
+        JSONObject result = null==resp ? null : resp.optJSONObject("result");
+        JSONArray loop = null==result ? null : result.optJSONArray("albums_loop");
+        List<String> ids = new ArrayList<>();
+        for (int i = 0; null!=loop && i < loop.length(); i++) {
+            ids.add(loop.getJSONObject(i).optString("id", ""));
+        }
+        return ids;
+    }
+
+    private boolean showUnplayed() {
+        return prefs.getBoolean(SHOW_UNPLAYED_PREF_KEY, true);
+    }
+
+    /** Fetch the play counts in the background if they are missing or old, so Unplayed Albums opens quickly. */
+    public void prefetchPlayCounts() {
+        if (showUnplayed()) {
+            new Thread(this::unplayedAlbumIds, "PlayCounts").start();
+        }
+    }
+
+    // The active library's albums without plays, fetched at most once a day (or when the library changes), or null.
+    // Has its own lock, not the browse executor: a slow fetch only holds up the list that needs it.
+    private List<String> unplayedAlbumIds() {
+        synchronized (playCountsLock) {
+            String lib = getLibraryId();
+            long now = SystemClock.elapsedRealtime();
+            if (null!=unplayedAlbums && Objects.equals(lib, unplayedAlbums.libraryId) && now - unplayedAlbums.time < PLAY_COUNTS_MAX_AGE_MS) {
+                return unplayedAlbums.ids;
+            }
+            try {
+                List<String> params = new ArrayList<>(Arrays.asList("titles", "0", String.valueOf(PLAY_COUNTS_TRACK_LIMIT), "tags:Oe"));
+                addLibraryParam(params);
+                JSONObject resp = rpc.sendMessageSync("", params.toArray(new String[0]), INDEX_TIMEOUT_MS);
+                JSONObject result = null==resp ? null : resp.optJSONObject("result");
+                JSONArray loop = null==result ? null : result.optJSONArray("titles_loop");
+                if (null!=loop) {
+                    Map<String, Integer> plays = new LinkedHashMap<>();
+                    for (int i = 0; i < loop.length(); i++) {
+                        JSONObject track = loop.getJSONObject(i);
+                        String album = track.optString("album_id", "");
+                        if (!album.isEmpty()) {
+                            plays.merge(album, track.optInt("playcount", 0), Integer::sum);
+                        }
+                    }
+                    List<String> ids = new ArrayList<>();
+                    for (Map.Entry<String, Integer> e : plays.entrySet()) {
+                        if (0==e.getValue()) {
+                            ids.add(e.getKey());
+                        }
+                    }
+                    Utils.debug("Play counts: " + loop.length() + " tracks, " + plays.size() + " albums, " + ids.size() + " unplayed");
+                    unplayedAlbums = new UnplayedAlbums(lib, now, ids);
+                }
+            } catch (Exception e) {
+                Utils.error("Failed to fetch play counts", e);
+            }
+            return null==unplayedAlbums ? null : unplayedAlbums.ids;
+        }
     }
 
     private List<MediaBrowserCompat.MediaItem> loadArtistAlbums(String artistId) {
@@ -819,6 +1101,10 @@ public class LmsBrowseHelper {
             // Tapping a track queues the whole album (exactly the tracks listed, in this order) and
             // starts playback at that track - so remember the list for playMediaId().
             List<String> trackIds = new ArrayList<>();
+            if (loop.length() > 0) {
+                items.add(buildPlayableItem(ALBUM_TRACK_PREFIX + albumId + "/0", context.getString(R.string.play_album), null, drawableUri(R.drawable.ic_play)));
+                items.add(buildQueueAddItem("album/" + albumId));
+            }
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
                 trackIds.add(track.optString("id", ""));
@@ -984,6 +1270,7 @@ public class LmsBrowseHelper {
             if (null==loop) return items;
 
             items.add(buildPlayableItem("playlist/" + playlistId, "\u25B6 Play All", null, null));
+            items.add(buildQueueAddItem("playlist/" + playlistId));
             for (int i = 0; i < loop.length(); i++) {
                 JSONObject track = loop.getJSONObject(i);
                 String id = track.optString("id", "");
@@ -1030,6 +1317,133 @@ public class LmsBrowseHelper {
             Utils.error("Failed to load players", e);
         }
         return items;
+    }
+
+    // The other connected players with something in their queue, by name, showing what each is playing. Playable
+    // items, so nothing is copied by Android Auto preloading the list.
+    private List<MediaBrowserCompat.MediaItem> loadCopyQueueSources() {
+        List<MediaBrowserCompat.MediaItem> items = new ArrayList<>();
+        try {
+            JSONObject resp = rpc.sendMessageSync("", new String[]{"players", "0", "100"}, TIMEOUT_MS);
+            JSONObject result = null==resp ? null : resp.optJSONObject("result");
+            JSONArray loop = null==result ? null : result.optJSONArray("players_loop");
+            List<JSONObject> players = new ArrayList<>();
+            for (int i = 0; null!=loop && i < loop.length(); i++) {
+                players.add(loop.getJSONObject(i));
+            }
+            players.sort((a, b) -> a.optString("name", "").compareToIgnoreCase(b.optString("name", "")));
+            for (JSONObject player : players) {
+                String id = player.optString("playerid", "");
+                if (id.isEmpty() || id.equals(MainActivity.activePlayer) || 1!=player.optInt("connected", 0)) {
+                    continue;
+                }
+                JSONObject status = rpc.sendMessageSync(id, new String[]{"status", "-", "1", "tags:au"}, TIMEOUT_MS);
+                status = null==status ? null : status.optJSONObject("result");
+                if (null==status || status.optInt("playlist_tracks", 0) <= 0) {
+                    continue;
+                }
+                JSONArray tracks = status.optJSONArray("playlist_loop");
+                JSONObject track = null==tracks || tracks.length() == 0 ? null : tracks.getJSONObject(0);
+                JSONObject info = null==track ? null : libraryTrackInfo(track);
+                if (null==info) {
+                    info = track;
+                }
+                String subtitle = ("play".equals(status.optString("mode")) ? "\u25B6 " : "\u23F8 ") +
+                        (null==info ? "" : info.optString("title", "") +
+                                (info.optString("artist", "").isEmpty() ? "" : " \u00b7 " + info.optString("artist", "")));
+                items.add(buildPlayableItem(COPY_QUEUE_PREFIX + id, player.optString("name", id), subtitle, null));
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to load players to copy the queue from", e);
+        }
+        if (items.isEmpty()) {
+            items.add(buildBrowsableItem(COPY_QUEUE_ID + "/none", context.getString(R.string.copy_queue_none), null));
+        }
+        return items;
+    }
+
+    /**
+     * The library track (id, title, artist) of a queue entry with tags u, or null if it isn't one. Syncing players
+     * (e.g. the Material skin's queue transfer) turns cue sheet tracks into temporary "tmp://<file>#start-end"
+     * entries without metadata and with negative IDs; the same URL with file:// finds the library track again.
+     */
+    private JSONObject libraryTrackInfo(JSONObject entry) throws Exception {
+        String url = entry.optString("url", "");
+        if (url.startsWith("tmp://")) {
+            url = "file://" + url.substring(6);
+        } else if (entry.optLong("id", 0) <= 0) {
+            return null;
+        }
+        JSONObject resp = rpc.sendMessageSync("", new String[]{"songinfo", "0", "20", "url:" + url, "tags:at"}, TIMEOUT_MS);
+        JSONObject result = null==resp ? null : resp.optJSONObject("result");
+        JSONArray loop = null==result ? null : result.optJSONArray("songinfo_loop");
+        if (null==loop) return null;
+        // songinfo returns one field per entry
+        JSONObject info = new JSONObject();
+        for (int i = 0; i < loop.length(); i++) {
+            JSONObject field = loop.getJSONObject(i);
+            for (Iterator<String> it = field.keys(); it.hasNext(); ) {
+                String key = it.next();
+                info.put(key, field.get(key));
+            }
+        }
+        return info.optLong("id", 0) > 0 ? info : null;
+    }
+
+    /**
+     * Copy another player's queue, current track and position to the active player and play it there. Done track
+     * by track rather than with the Material skin's queue transfer, whose sync/unsync leaves cue sheet tracks as
+     * metadata-less "tmp://" copies; such entries in the source queue are mapped back to library tracks. Entries
+     * that aren't library tracks (e.g. radio) are copied by URL.
+     */
+    private boolean copyQueue(String fromId) {
+        String toId = MainActivity.activePlayer;
+        if (Utils.isEmpty(toId) || toId.equals(fromId)) {
+            return false;
+        }
+        try {
+            JSONObject status = rpc.sendMessageSync(fromId, new String[]{"status", "0", String.valueOf(BROWSE_LIMIT), "tags:u"}, TIMEOUT_MS);
+            status = null==status ? null : status.optJSONObject("result");
+            JSONArray loop = null==status ? null : status.optJSONArray("playlist_loop");
+            if (null==loop || loop.length() == 0) return false;
+            int index = status.optInt("playlist_cur_index", 0);
+            double time = status.optDouble("time", 0);
+            // Each entry: a library track ID, or a URL
+            List<String> trackIds = new ArrayList<>();
+            List<String> urls = new ArrayList<>();
+            boolean allTracks = true;
+            for (int i = 0; i < loop.length(); i++) {
+                JSONObject entry = loop.getJSONObject(i);
+                JSONObject info = libraryTrackInfo(entry);
+                trackIds.add(null==info ? null : String.valueOf(info.optLong("id")));
+                urls.add(entry.optString("url", ""));
+                allTracks &= null!=info;
+            }
+            Utils.debug("Copying the queue of " + fromId + " to " + toId + ": " + loop.length() + " entries" +
+                    (allTracks ? "" : ", not all library tracks") + ", at " + index + "/" + time);
+            if (allTracks) {
+                // Waited for, so the seek below comes after the load. No library filter: copy exactly that queue.
+                rpc.sendMessageSync(toId, new String[]{"playlistcontrol", "cmd:load", "track_id:" + String.join(",", trackIds),
+                        "play_index:" + index, "library_id:" + ALL_LIBRARIES_ID}, TIMEOUT_MS);
+            } else {
+                rpc.sendMessageSync(toId, new String[]{"playlist", "clear"}, TIMEOUT_MS);
+                for (int i = 0; i < trackIds.size(); i++) {
+                    rpc.sendMessageSync(toId, null!=trackIds.get(i)
+                            ? new String[]{"playlistcontrol", "cmd:add", "track_id:" + trackIds.get(i), "library_id:" + ALL_LIBRARIES_ID}
+                            : new String[]{"playlist", "add", urls.get(i)}, TIMEOUT_MS);
+                }
+                rpc.sendMessageSync(toId, new String[]{"playlist", "index", String.valueOf(index)}, TIMEOUT_MS);
+            }
+            if (time > 1) {
+                // Seek once the track has started, or LMS ignores it.
+                Thread.sleep(1000);
+                rpc.sendMessageSync(toId, new String[]{"time", String.valueOf(time)}, TIMEOUT_MS);
+            }
+            return true;
+        } catch (Exception e) {
+            Utils.error("Failed to copy the queue of " + fromId, e);
+            return false;
+        }
     }
 
     private List<MediaBrowserCompat.MediaItem> loadLibraries() {
@@ -1086,6 +1500,11 @@ public class LmsBrowseHelper {
     }
 
     private JSONArray fetchLibraries() {
+        return fetchLibraries(rpc);
+    }
+
+    /** LMS's libraries, or null if LMS couldn't be asked. */
+    public static JSONArray fetchLibraries(JsonRpc rpc) {
         try {
             JSONObject resp = rpc.sendMessageSync("", new String[]{"libraries"}, TIMEOUT_MS);
             JSONObject result = null==resp ? null : resp.optJSONObject("result");
@@ -1096,6 +1515,24 @@ public class LmsBrowseHelper {
             Utils.debug("Failed to load libraries: " + e.getMessage());
             return null;
         }
+    }
+
+    public static boolean isKnownLibrary(JSONArray libraries, String id) {
+        return null!=libraryName(libraries, id);
+    }
+
+    /**
+     * The library ID to store in the shared "active_library" pref: null for All (and for anything that isn't
+     * a plain LMS library ID).
+     */
+    public static String normalizeLibraryId(String id) {
+        if (null==id) return null;
+        id = id.trim();
+        if (id.isEmpty() || ALL_LIBRARIES_ID.equals(id) || "0".equals(id) || "__ALL__".equals(id) ||
+                !id.matches("[A-Za-z0-9_.-]{1,64}")) {
+            return null;
+        }
+        return id;
     }
 
     private static String libraryName(JSONArray libraries, String id) {
@@ -1227,6 +1664,8 @@ public class LmsBrowseHelper {
         } else if (mediaId.startsWith("album/")) {
             sendLoadCommand("album_id:" + mediaId.substring(6));
             return true;
+        } else if (mediaId.startsWith(COPY_QUEUE_PREFIX)) {
+            return copyQueue(mediaId.substring(COPY_QUEUE_PREFIX.length()));
         } else if (mediaId.startsWith("track/")) {
             sendLoadCommand("track_id:" + mediaId.substring(6));
             return true;
@@ -1236,6 +1675,48 @@ public class LmsBrowseHelper {
         } else if (mediaId.startsWith("favorite/")) {
             sendPlayCommand(new String[]{"favorites", "playlist", "play", "item_id:" + mediaId.substring(9)});
             return true;
+        }
+        return false;
+    }
+
+    public static boolean isQueueAdd(String mediaId) {
+        return mediaId.startsWith(QUEUE_ADD_PREFIX);
+    }
+
+    /**
+     * Run a tapped "Add to queue" row: add the album or playlist to the end of the active player's queue. If the
+     * queue was empty, playback is started: returns true then. Called on the browse executor.
+     */
+    public boolean addToQueue(String action) {
+        String mediaId = action.substring(QUEUE_ADD_PREFIX.length());
+        String playerId = MainActivity.activePlayer;
+        String item = null;
+        if (mediaId.startsWith("album/")) {
+            String albumId = mediaId.substring(6);
+            AlbumTracks tracks = lastAlbumTracks;
+            // Same tracks, in the same order, as the track list shows.
+            item = null!=tracks && tracks.albumId.equals(albumId) ? "track_id:" + String.join(",", tracks.trackIds) : "album_id:" + albumId;
+        } else if (mediaId.startsWith("playlist/")) {
+            item = "playlist_id:" + mediaId.substring(9);
+        }
+        if (Utils.isEmpty(playerId) || null==item) {
+            return false;
+        }
+        try {
+            JSONObject resp = rpc.sendMessageSync(playerId, new String[]{"status", "-", "1", "tags:"}, TIMEOUT_MS);
+            JSONObject result = null==resp ? null : resp.optJSONObject("result");
+            if (null==result) return false;
+            boolean wasEmpty = 0==result.optInt("playlist_tracks", 0);
+            String lib = getLibraryId();
+            rpc.sendMessageSync(playerId, new String[]{"playlistcontrol", "cmd:add", item,
+                    "library_id:" + (null!=lib ? lib : ALL_LIBRARIES_ID)}, TIMEOUT_MS);
+            Utils.debug("Added " + mediaId + " to the " + (wasEmpty ? "empty " : "") + "queue");
+            if (wasEmpty) {
+                rpc.sendMessageSync(playerId, new String[]{"playlist", "index", "0"}, TIMEOUT_MS);
+                return true;
+            }
+        } catch (Exception e) {
+            Utils.error("Failed to add " + mediaId + " to the queue", e);
         }
         return false;
     }
@@ -1312,10 +1793,16 @@ public class LmsBrowseHelper {
         } else {
             prefs.edit().putString(ACTIVE_LIBRARY_PREF_KEY, libraryId).apply();
         }
+        clearLibraryCaches();
+    }
+
+    /** Drop what was loaded for the previous library. Call on the browse thread. */
+    public void clearLibraryCaches() {
         albumArtistIndex = null;
         allArtistIndex = null;
         albumsAlphaIndex = null;
         lastAlbumTracks = null;
+        dailyLists.clear(); // rebuilt for the new library
     }
 
     private String normalizeTextkey(String textkey) {
@@ -1490,6 +1977,10 @@ public class LmsBrowseHelper {
         return albumOpensTrackList()
                 ? buildBrowsableItemWithGroup("album/" + albumId, title, subtitle, iconUri, groupTitle)
                 : buildPlayableItemWithGroup("album/" + albumId, title, subtitle, iconUri, groupTitle);
+    }
+
+    private MediaBrowserCompat.MediaItem buildQueueAddItem(String mediaId) {
+        return buildPlayableItem(QUEUE_ADD_PREFIX + mediaId, context.getString(R.string.add_to_queue), null, drawableUri(R.drawable.ic_queue_add));
     }
 
     private MediaBrowserCompat.MediaItem buildPlayableItem(String mediaId, String title, String subtitle, Uri iconUri) {
