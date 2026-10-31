@@ -58,23 +58,23 @@ public class LocalPlayer {
         }
     }
 
+    // Returns true if a player app is configured and was asked to start.
     @SuppressLint("SdCardPath")
-    public void start() {
+    public boolean start() {
         String playerApp = sharedPreferences.getString(SettingsActivity.PLAYER_APP_PREF_KEY, null);
         Utils.debug("Start player: " + playerApp);
+        boolean started = false;
         if (SB_PLAYER.equals(playerApp)) {
-            if (sendSbPlayerIntent(true)) {
-                state = State.STARTED;
-            }
+            started = sendSbPlayerIntent(true);
         } else if (SQUEEZE_PLAYER.equals(playerApp)) {
-            if (controlSqueezePlayer(true)) {
-                state = State.STARTED;
-            }
+            started = controlSqueezePlayer(true);
         } else if (SQUEEZELITE.equals(playerApp)) {
-            if (controlSqueezelite(true)) {
-                state = State.STARTED;
-            }
+            started = controlSqueezelite(true);
         }
+        if (started) {
+            state = State.STARTED;
+        }
+        return started;
     }
 
     public void stopPlayer(String playerId) {

@@ -27,6 +27,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Point;
 import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -70,6 +71,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.preference.PreferenceManager;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -103,6 +105,10 @@ public class MainActivity extends AppCompatActivity {
     private static final int PAGE_TIMEOUT = 5000; // ms
     private static final int DISCONNECT_TIMEOUT = 6; // seconds
     private static final int DISCONNECT_TIMEOUT_WITHOUT_NETWORK = 10; // seconds
+    // After this long in the background, or after the network changed meanwhile, the page is reloaded: the web UI
+    // can keep showing a stale player, e.g. its progress clock still running hours after the player was forgotten
+    // by LMS, or an empty queue after moving from Wi-Fi to mobile data.
+    private static final long RELOAD_AFTER_BACKGROUND_MS = 30 * 60 * 1000;
 
     private SharedPreferences sharedPreferences;
     private WebView webView;
@@ -121,6 +127,8 @@ public class MainActivity extends AppCompatActivity {
     public static boolean isDark = true;
     private boolean pageLoaded = false;
     private long recreateTime = 0;
+    private long pauseTime = 0;
+    private Network pauseNetwork = null;
     private LocalPlayer localPlayer;
     private boolean interceptVolume = true;
 
@@ -521,6 +529,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
+        sharedPreferences.registerOnSharedPreferenceChangeListener(libraryPrefListener);
         localPlayer = new LocalPlayer(sharedPreferences, this);
         setTheme();
         setDefaults();
@@ -596,6 +605,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 readVolumeStep();
+                startLibrarySync();
             }
 
             @Override
@@ -761,29 +771,21 @@ public class MainActivity extends AppCompatActivity {
     @JavascriptInterface
     public void updatePlayer(String playerId, String playerName, String ip) {
         Utils.debug("Active player: "+playerId+", name: "+playerName+", ip:" + ip);
+        if (!PlayerAvailability.isAllowed(PlayerAvailability.restrictedPlayer(sharedPreferences), playerId, playerName)) {
+            Utils.debug("Ignoring non-default player " + playerId);
+            return;
+        }
         activePlayer = playerId;
         activePlayerName = playerName;
+        // Save straight away: ControlService watches this, so Android Auto follows the player even when
+        // this activity isn't bound to the service (it only binds when phone notifications are enabled).
+        if (null!=playerId && !playerId.equals(sharedPreferences.getString(CURRENT_PLAYER_ID_KEY, null))) {
+            sharedPreferences.edit().putString(CURRENT_PLAYER_ID_KEY, playerId).apply();
+        }
 
         interceptVolume = !sharedPreferences.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true) || !isLocalPlayer(ip);
         Utils.debug("interceptVolume:"+interceptVolume);
         sendMessageToService(ControlService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
-    }
-
-    @JavascriptInterface
-    public void updateLibrary(String libraryId) {
-        String current = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
-        String updated = Utils.isEmpty(libraryId) || "-1".equals(libraryId) ? null : libraryId;
-        if ((null==current && null==updated) || (null!=current && current.equals(updated))) {
-            return;
-        }
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-        if (null==updated) {
-            editor.remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY);
-        } else {
-            editor.putString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, updated);
-        }
-        editor.apply();
-        sendMessageToService(ControlService.LIBRARY_CHANGED, null);
     }
 
     public static Set<String> getLocalIpAddresses() {
@@ -881,9 +883,6 @@ public class MainActivity extends AppCompatActivity {
             if (ControlService.isActive()) {
                 refreshControlService();
             }
-            runOnUiThread(() -> webView.evaluateJavascript(
-                    "try { NativeReceiver.updateLibrary(localStorage.getItem('lms-material::library') || '-1'); } catch(e) {}",
-                    null));
         } else {
             startDisconnectTimer();
         }
@@ -993,8 +992,92 @@ public class MainActivity extends AppCompatActivity {
         Utils.info("");
         webView.onPause();
         webView.pauseTimers();
+        pauseTime = SystemClock.elapsedRealtime();
+        pauseNetwork = activeNetwork();
         super.onPause();
         isCurrentActivity = false;
+    }
+
+    /*
+     * The phone UI and Android Auto use the same library. The shared value is the "active_library" pref
+     * (null = All). The phone UI (Material skin) keeps its own copy in localStorage:
+     * - on page load the pref is written into the skin, never the other way round: a reload (after a network
+     *   change, or 30 minutes in the background) must not switch Android Auto to whatever the page had;
+     * - a library picked in the phone UI (the skin's "libraryChanged" event, only sent on a real change) is
+     *   written to the pref, and ControlService switches Android Auto to it;
+     * - a library picked in Android Auto changes the pref, which is pushed into the skin while this activity
+     *   exists, else on the next page load.
+     * A library LMS doesn't know (removed or rebuilt) falls back to All, checked on page load here and on car
+     * connect in ControlService.
+     */
+    private static final String LIBRARY_SYNC_JS =
+            "(function(){var n=0;function hook(){" +
+            "if(typeof bus==='undefined'||!bus.$store){if(++n<40)setTimeout(hook,250);return;}" +
+            "var id=NativeReceiver.currentLibrary();if(''+bus.$store.state.library!==id)bus.$store.commit('setLibrary',id);" +
+            "if(window.arLibrarySync)return;window.arLibrarySync=true;" +
+            "bus.$on('libraryChanged',function(){try{NativeReceiver.libraryChanged(''+bus.$store.state.library);}catch(e){}});" +
+            "}hook();})()";
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener libraryPrefListener = (prefs, key) -> {
+        if (LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY.equals(key)) {
+            runOnUiThread(this::pushLibraryToPage);
+        }
+    };
+
+    private void startLibrarySync() {
+        if (null==webView) {
+            return;
+        }
+        // Waits for the skin's store, writes the pref into it (before hooking the event, so no echo), then hooks.
+        webView.evaluateJavascript(LIBRARY_SYNC_JS, null);
+        executorService.execute(this::checkLibraryKnown);
+    }
+
+    /** The shared library in the skin's form: "-1" for All. Only [A-Za-z0-9_.-] (normalizeLibraryId). */
+    @JavascriptInterface
+    public String currentLibrary() {
+        String lib = LmsBrowseHelper.normalizeLibraryId(sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null));
+        return null==lib ? "-1" : lib;
+    }
+
+    private void pushLibraryToPage() {
+        if (null==webView || !pageLoaded) {
+            return;
+        }
+        // Safe to put into the script as is (see currentLibrary). The skin's setLibrary does nothing if it already
+        // has this library.
+        String id = currentLibrary();
+        webView.evaluateJavascript("(function(){try{if(typeof bus!=='undefined'&&bus.$store&&''+bus.$store.state.library!=='" + id +
+                "'){bus.$store.commit('setLibrary','" + id + "');}}catch(e){}})()", null);
+    }
+
+    @JavascriptInterface
+    public void libraryChanged(String libraryId) {
+        String lib = LmsBrowseHelper.normalizeLibraryId(libraryId);
+        String current = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
+        if (null==lib ? null==current : lib.equals(current)) {
+            return;
+        }
+        Utils.debug("Library from the phone UI: " + libraryId);
+        if (null==lib) {
+            sharedPreferences.edit().remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY).apply();
+        } else {
+            sharedPreferences.edit().putString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, lib).apply();
+        }
+    }
+
+    /** Fall back to All if LMS no longer has the library. Left alone if LMS can't be asked. */
+    private void checkLibraryKnown() {
+        String lib = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
+        if (null==lib) {
+            return;
+        }
+        JSONArray libraries = LmsBrowseHelper.fetchLibraries(new JsonRpc(getApplicationContext()));
+        if (null!=libraries && !LmsBrowseHelper.isKnownLibrary(libraries, lib) &&
+                lib.equals(sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null))) {
+            Utils.debug("Unknown library " + lib + ", selecting all");
+            sharedPreferences.edit().remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY).apply();
+        }
     }
 
     private void readVolumeStep() {
@@ -1047,6 +1130,14 @@ public class MainActivity extends AppCompatActivity {
         if (!settingsShown) {
             if (pageLoaded) {
                 localPlayer.autoStart(true);
+                Network network = activeNetwork();
+                boolean networkChanged = null!=pauseNetwork && null!=network && !pauseNetwork.equals(network);
+                if (pauseTime>0 && (networkChanged || SystemClock.elapsedRealtime()-pauseTime>RELOAD_AFTER_BACKGROUND_MS)) {
+                    Utils.info("Reload URL after " + ((SystemClock.elapsedRealtime()-pauseTime)/60000) + " minutes in the background" +
+                               (networkChanged ? ", network changed" : ""));
+                    pageError = false;
+                    webView.reload();
+                }
             }
             if (!ControlService.NO_NOTIFICATION.equals(sharedPreferences.getString(SettingsActivity.NOTIFCATIONS_PREF_KEY, ControlService.NO_NOTIFICATION)) && Utils.notificationAllowed(this, ControlService.NOTIFICATION_CHANNEL_ID)) {
                 if (!ControlService.isActive()) {
@@ -1112,6 +1203,11 @@ public class MainActivity extends AppCompatActivity {
         reloadUrlAfterSettings=false;
     }
 
+    private Network activeNetwork() {
+        ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        return null==connectivityManager ? null : connectivityManager.getActiveNetwork();
+    }
+
     @Override
     protected void onNewIntent(Intent intent) {
         Utils.debug(intent.getAction());
@@ -1167,6 +1263,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         Utils.info("");
+        sharedPreferences.unregisterOnSharedPreferenceChangeListener(libraryPrefListener);
         webView.destroy();
         webView = null;
         stopControlService();

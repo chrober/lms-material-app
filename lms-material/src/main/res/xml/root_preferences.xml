@@ -142,6 +142,49 @@
 
     <PreferenceCategory
         app:iconSpaceReserved="false"
+        app:title="@string/android_auto">
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="auto_tab_order"
+            app:title="@string/auto_tab_order" />
+        <ListPreference
+            android:defaultValue="tracks"
+            android:entries="@array/autoAlbumClick"
+            android:entryValues="@array/autoAlbumClickAlias"
+            android:key="auto_album_click"
+            android:title="@string/auto_album_click"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"
+            app:key="auto_show_unplayed"
+            app:summary="@string/auto_show_unplayed_summary"
+            app:title="@string/auto_show_unplayed" />
+        <ListPreference
+            android:defaultValue="12"
+            android:entries="@array/autoRediscoverMonths"
+            android:entryValues="@array/autoRediscoverMonthsAlias"
+            android:key="auto_rediscover_months"
+            android:title="@string/auto_rediscover_months"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="auto_ignore_connect_play"
+            app:summary="@string/auto_ignore_connect_play_summary"
+            app:title="@string/auto_ignore_connect_play" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="auto_resume_on_connect"
+            app:summary="@string/auto_resume_on_connect_summary"
+            app:title="@string/auto_resume_on_connect" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
         app:title="@string/advanced">
         <Preference
             app:iconSpaceReserved="false"

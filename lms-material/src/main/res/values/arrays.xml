@@ -66,4 +66,22 @@
         <item>32</item>
         <item>48</item>
     </string-array>
+    <string-array name="autoRediscoverMonths">
+        <item>6 months</item>
+        <item>12 months</item>
+        <item>18 months</item>
+    </string-array>
+    <string-array name="autoRediscoverMonthsAlias" translatable="false">
+        <item>6</item>
+        <item>12</item>
+        <item>18</item>
+    </string-array>
+    <string-array name="autoAlbumClick">
+        <item>Show tracks, play from the selected track</item>
+        <item>Play the whole album</item>
+    </string-array>
+    <string-array name="autoAlbumClickAlias" translatable="false">
+        <item>tracks</item>
+        <item>play</item>
+    </string-array>
 </resources>

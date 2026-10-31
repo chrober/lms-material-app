@@ -16,11 +16,16 @@ import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -36,6 +41,8 @@ import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceManager;
 import androidx.preference.SwitchPreferenceCompat;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import io.github.muddz.styleabletoast.StyleableToast;
@@ -62,6 +69,8 @@ public class SettingsActivity extends AppCompatActivity {
     public static final String AUTO_START_PLAYER_APP_PREF_KEY = "auto_start_player";
     public static final String PLAYER_START_MENU_ITEM_PREF_KEY = "menu_start_player";
     public static final String STOP_APP_ON_QUIT_PREF_KEY = "stop_app_on_quit";
+    public static final String IGNORE_CONNECT_PLAY_PREF_KEY = "auto_ignore_connect_play";
+    public static final String RESUME_ON_CONNECT_PREF_KEY = "auto_resume_on_connect";
     public static final int PERMISSION_READ_PHONE_STATE = 1;
     public static final int PERMISSION_POST_NOTIFICATIONS = 2;
     public static final int PERMISSION_NOTIFS_AND_READ_PHONE_STATE = 3;
@@ -295,6 +304,18 @@ public class SettingsActivity extends AppCompatActivity {
                         layout.setOrientation(LinearLayout.VERTICAL);
                         layout.setPadding(padding, padding, padding, padding / 2);
                         layout.addView(input);
+                        String currentPlayer = MainActivity.activePlayerName;
+                        if (null != currentPlayer && !currentPlayer.isEmpty()) {
+                            Button useCurrent = new Button(getContext(), null, android.R.attr.borderlessButtonStyle);
+                            useCurrent.setText(getString(R.string.use_current_player, currentPlayer));
+                            useCurrent.setOnClickListener(v -> {
+                                input.setText(currentPlayer);
+                                input.setSelection(currentPlayer.length());
+                            });
+                            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                            params.gravity = Gravity.END;
+                            layout.addView(useCurrent, params);
+                        }
                         builder.setView(layout);
 
                         builder.setPositiveButton(R.string.ok, (dialog, which) -> {
@@ -309,6 +330,15 @@ public class SettingsActivity extends AppCompatActivity {
 
                         builder.show();
                     }
+                    return true;
+                });
+            }
+
+            final Preference tabOrderButton = getPreferenceManager().findPreference(AutoTabOrder.PREF_KEY);
+            if (tabOrderButton != null) {
+                updateTabOrderSummary(tabOrderButton);
+                tabOrderButton.setOnPreferenceClickListener(arg0 -> {
+                    showTabOrderDialog(tabOrderButton);
                     return true;
                 });
             }
@@ -356,6 +386,99 @@ public class SettingsActivity extends AppCompatActivity {
             setAfterCallState();
             updateListSummary(PLAYER_APP_PREF_KEY);
             PreferenceManager.getDefaultSharedPreferences(getContext()).registerOnSharedPreferenceChangeListener(this);
+        }
+
+        private String tabLabel(String tab) {
+            switch (tab) {
+                case AutoTabOrder.ALBUMS: return getString(R.string.auto_tab_albums);
+                case AutoTabOrder.ARTISTS: return getString(R.string.auto_tab_artists);
+                case AutoTabOrder.FAVORITES: return getString(R.string.auto_tab_favorites);
+                case AutoTabOrder.PLAYLISTS: return getString(R.string.auto_tab_playlists);
+                case AutoTabOrder.PLAYERS: return getString(R.string.auto_tab_players);
+                case AutoTabOrder.LIBRARIES: return getString(R.string.auto_tab_libraries);
+                case AutoTabOrder.COPY_QUEUE: return getString(R.string.auto_tab_copy_queue);
+                default: return tab;
+            }
+        }
+
+        private void updateTabOrderSummary(Preference pref) {
+            if (getContext()==null) {
+                return;
+            }
+            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getContext());
+            List<String> labels = new ArrayList<>();
+            for (String tab : AutoTabOrder.parse(sharedPreferences.getString(AutoTabOrder.PREF_KEY, null))) {
+                labels.add(tabLabel(tab));
+            }
+            pref.setSummary(String.join(", ", labels));
+        }
+
+        private void showTabOrderDialog(Preference pref) {
+            if (getContext()==null) {
+                return;
+            }
+            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getContext());
+            List<String> order = AutoTabOrder.parse(sharedPreferences.getString(AutoTabOrder.PREF_KEY, null));
+            int padding = getResources().getDimensionPixelOffset(R.dimen.dlg_padding);
+            LinearLayout layout = new LinearLayout(getContext());
+            layout.setOrientation(LinearLayout.VERTICAL);
+            layout.setPadding(padding, padding / 2, padding / 2, 0);
+            populateTabOrderRows(layout, order);
+
+            AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
+            builder.setTitle(R.string.auto_tab_order);
+            builder.setView(layout);
+            builder.setPositiveButton(R.string.ok, (dialog, which) -> {
+                sharedPreferences.edit().putString(AutoTabOrder.PREF_KEY, AutoTabOrder.serialize(order)).apply();
+                updateTabOrderSummary(pref);
+            });
+            builder.setNeutralButton(R.string.reset, (dialog, which) -> {
+                sharedPreferences.edit().putString(AutoTabOrder.PREF_KEY, AutoTabOrder.serialize(AutoTabOrder.DEFAULT)).apply();
+                updateTabOrderSummary(pref);
+            });
+            builder.setNegativeButton(R.string.cancel, (dialog, which) -> dialog.cancel());
+            builder.show();
+        }
+
+        private void populateTabOrderRows(LinearLayout layout, List<String> order) {
+            layout.removeAllViews();
+            Context context = layout.getContext();
+            for (int i = 0; i < order.size(); i++) {
+                final int pos = i;
+                LinearLayout row = new LinearLayout(context);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView label = new TextView(context);
+                label.setTextAppearance(android.R.style.TextAppearance_Material_Subhead);
+                label.setText((i + 1) + ". " + tabLabel(order.get(i)));
+                row.addView(label, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+                row.addView(tabOrderButton(context, R.drawable.ic_arrow_up, R.string.move_up, i > 0, () -> {
+                    Collections.swap(order, pos, pos - 1);
+                    populateTabOrderRows(layout, order);
+                }));
+                row.addView(tabOrderButton(context, R.drawable.ic_arrow_down, R.string.move_down, i < order.size() - 1, () -> {
+                    Collections.swap(order, pos, pos + 1);
+                    populateTabOrderRows(layout, order);
+                }));
+                layout.addView(row);
+            }
+        }
+
+        private ImageButton tabOrderButton(Context context, int icon, int description, boolean enabled, Runnable action) {
+            ImageButton button = new ImageButton(context);
+            button.setImageResource(icon);
+            TypedValue background = new TypedValue();
+            context.getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, background, true);
+            button.setBackgroundResource(background.resourceId);
+            button.setContentDescription(getString(description));
+            int padding = getResources().getDimensionPixelOffset(R.dimen.dlg_padding) / 2;
+            button.setPadding(padding, padding / 2, padding, padding / 2);
+            button.setEnabled(enabled);
+            button.setAlpha(enabled ? 1.0f : 0.3f);
+            button.setOnClickListener(v -> action.run());
+            return button;
         }
 
         @Override
