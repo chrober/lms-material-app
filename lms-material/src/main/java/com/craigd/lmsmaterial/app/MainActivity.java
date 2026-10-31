@@ -761,29 +761,21 @@ public class MainActivity extends AppCompatActivity {
     @JavascriptInterface
     public void updatePlayer(String playerId, String playerName, String ip) {
         Utils.debug("Active player: "+playerId+", name: "+playerName+", ip:" + ip);
+        if (!PlayerAvailability.isAllowed(PlayerAvailability.restrictedPlayer(sharedPreferences), playerId, playerName)) {
+            Utils.debug("Ignoring non-default player " + playerId);
+            return;
+        }
         activePlayer = playerId;
         activePlayerName = playerName;
+        // Save straight away: ControlService watches this, so Android Auto follows the player even when
+        // this activity isn't bound to the service (it only binds when phone notifications are enabled).
+        if (null!=playerId && !playerId.equals(sharedPreferences.getString(CURRENT_PLAYER_ID_KEY, null))) {
+            sharedPreferences.edit().putString(CURRENT_PLAYER_ID_KEY, playerId).apply();
+        }
 
         interceptVolume = !sharedPreferences.getBoolean(SettingsActivity.HARDWARE_VOLUME_PREF_KEY, true) || !isLocalPlayer(ip);
         Utils.debug("interceptVolume:"+interceptVolume);
         sendMessageToService(ControlService.ACTIVE_PLAYER, new String[]{activePlayer, activePlayerName});
-    }
-
-    @JavascriptInterface
-    public void updateLibrary(String libraryId) {
-        String current = sharedPreferences.getString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, null);
-        String updated = Utils.isEmpty(libraryId) || "-1".equals(libraryId) ? null : libraryId;
-        if ((null==current && null==updated) || (null!=current && current.equals(updated))) {
-            return;
-        }
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-        if (null==updated) {
-            editor.remove(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY);
-        } else {
-            editor.putString(LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY, updated);
-        }
-        editor.apply();
-        sendMessageToService(ControlService.LIBRARY_CHANGED, null);
     }
 
     public static Set<String> getLocalIpAddresses() {
@@ -881,9 +873,6 @@ public class MainActivity extends AppCompatActivity {
             if (ControlService.isActive()) {
                 refreshControlService();
             }
-            runOnUiThread(() -> webView.evaluateJavascript(
-                    "try { NativeReceiver.updateLibrary(localStorage.getItem('lms-material::library') || '-1'); } catch(e) {}",
-                    null));
         } else {
             startDisconnectTimer();
         }
