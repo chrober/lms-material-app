@@ -46,6 +46,7 @@ import android.support.v4.media.session.PlaybackStateCompat;
 import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
+import android.view.KeyEvent;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -96,6 +97,7 @@ public class ControlService extends MediaBrowserServiceCompat {
     private static final String ACTION_POWER = "power";
     private static final String ACTION_QUIT = "quit";
     private static final String ACTION_RATE = "rate";
+    private static final String ACTION_SHUFFLE = "shuffle";
     private static final int RATING_REFRESH_MS = 1000;
     private static final int COMMAND_STATUS_REFRESH_MS = 500;
     private static final int PLAY_STATUS_REFRESH_MS = 2000;
@@ -111,6 +113,8 @@ public class ControlService extends MediaBrowserServiceCompat {
     // With "Ignore the car's play on connect", a play from Android Auto this soon after the car connects is dropped
     // (seen 2-13 s after the connect, with Android Auto's "Start music automatically" off).
     private static final long CONNECT_PLAY_IGNORE_MS = 15000;
+    // "Resume after reconnecting": the state saved when the car disconnected (a CarResume), until it is resumed.
+    private static final String CAR_RESUME_STATE_PREF_KEY = "auto_resume_state";
     // How long to wait for the local player app to show up in LMS after starting it.
     private static final int AUTO_PLAYER_TIMEOUT_MS = 20000;
     // On car connect, restart the player app if the default player is not connected after this long...
@@ -196,6 +200,11 @@ public class ControlService extends MediaBrowserServiceCompat {
     private String resumePlayer;
     private long resumeTrackId;
     private long resumeTime;
+    // "Resume after reconnecting": loaded on car connect, played once the player is on if it hasn't moved on since
+    // (cleared then either way). Main thread only.
+    private CarResume carResume;
+    private boolean carResumeChecking;
+    private boolean carResumePlay; // a play arrived during the check
     private boolean carConnected;
     private boolean carStateConnected; // last state read from Android Auto's car connection provider
     private BroadcastReceiver carConnectionReceiver;
@@ -216,6 +225,22 @@ public class ControlService extends MediaBrowserServiceCompat {
     private final SharedPreferences.OnSharedPreferenceChangeListener prefsListener = (sharedPreferences, key) -> {
         if (AutoTabOrder.PREF_KEY.equals(key)) {
             notifyChildrenChanged(LmsBrowseHelper.ROOT_ID);
+        } else if (SettingsActivity.RESUME_ON_CONNECT_PREF_KEY.equals(key)) {
+            if (!sharedPreferences.getBoolean(key, false)) {
+                handler.post(() -> {
+                    clearCarResumeState();
+                    sharedPreferences.edit().remove(CAR_RESUME_STATE_PREF_KEY).apply();
+                });
+            }
+        } else if (LmsBrowseHelper.SHOW_UNPLAYED_PREF_KEY.equals(key)) {
+            notifyChildrenChanged(LmsBrowseHelper.RELEASES_GROUP_ID);
+            getBrowseHelper().prefetchPlayCounts();
+        } else if (LmsBrowseHelper.ACTIVE_LIBRARY_PREF_KEY.equals(key)) {
+            // Also set from the phone UI (MainActivity syncs the two both ways).
+            getBrowseExecutor().execute(() -> {
+                getBrowseHelper().clearLibraryCaches();
+                handler.post(() -> selectionChanged(false));
+            });
         } else if (MainActivity.CURRENT_PLAYER_ID_KEY.equals(key)) {
             activePlayerChanged();
         } else if (SettingsActivity.SINGLE_PLAYER_PREF_KEY.equals(key) || SettingsActivity.DEFAULT_PLAYER_PREF_KEY.equals(key)) {
@@ -407,6 +432,21 @@ public class ControlService extends MediaBrowserServiceCompat {
     private synchronized MediaSessionCompat.Callback getMediaSessionCallback() {
         if (null==mediaSessionCallback) {
             mediaSessionCallback = new MediaSessionCompat.Callback() {
+                // Media keys (e.g. a car's buttons) arrive here before onPlay/onPause; a tap on Android Auto's
+                // screen calls those directly. Logged to tell the car's own play (after it is switched off and on
+                // with Android Auto still connected) from the driver's.
+                @Override
+                public boolean onMediaButtonEvent(Intent mediaButtonEvent) {
+                    KeyEvent event = mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+                    if (null!=event) {
+                        Utils.debug(KeyEvent.keyCodeToString(event.getKeyCode()) + " " +
+                                (KeyEvent.ACTION_DOWN==event.getAction() ? "down" : "up") + ", repeat:" +
+                                event.getRepeatCount() + ", device:" + event.getDeviceId() + ", source:0x" +
+                                Integer.toHexString(event.getSource()) + ", from " + controllerName());
+                    }
+                    return super.onMediaButtonEvent(mediaButtonEvent);
+                }
+
                 @Override
                 public void onPlay() {
                     Utils.debug("from " + controllerName());
@@ -415,10 +455,11 @@ public class ControlService extends MediaBrowserServiceCompat {
                         return;
                     }
                     playOnPlayer(() -> {
-                        sendCommand(PLAY_COMMAND);
-                        // Resuming, LMS's first status can still have the old time (seen: the track's end), and
-                        // nothing is pushed while a track plays on.
-                        handler.postDelayed(commandStatusRefresh, PLAY_STATUS_REFRESH_MS);
+                        if (null!=carResume) {
+                            checkCarResume(true);
+                        } else {
+                            playCurrent();
+                        }
                     });
                 }
 
@@ -446,6 +487,7 @@ public class ControlService extends MediaBrowserServiceCompat {
                 @Override
                 public void onSkipToQueueItem(long id) {
                     // Queue item IDs are LMS playlist indexes
+                    clearCarResume("queue item played");
                     playOnPlayer(() -> sendCommand(new String[]{"playlist", "index", Long.toString(id)}));
                 }
 
@@ -462,6 +504,15 @@ public class ControlService extends MediaBrowserServiceCompat {
                         });
                         return;
                     }
+                    if (LmsBrowseHelper.isQueueAdd(mediaId)) {
+                        // Adding counts as playing (with "Only control default" the player is switched on, or
+                        // its app started, first), as adding to an empty queue starts playback.
+                        getBrowseExecutor().execute(() -> switchOnForPlay(() ->
+                                handler.post(getBrowseHelper().addToQueue(mediaId)
+                                        ? ControlService.this::playbackRequested : commandStatusRefresh)));
+                        return;
+                    }
+                    clearCarResume("played from browse");
                     getBrowseExecutor().execute(() -> switchOnForPlay(() -> {
                         if (getBrowseHelper().playMediaId(mediaId)) {
                             handler.post(ControlService.this::playbackRequested);
@@ -476,6 +527,7 @@ public class ControlService extends MediaBrowserServiceCompat {
                         playOnPlayer(() -> sendCommand(PLAY_COMMAND));
                         return;
                     }
+                    clearCarResume("played from search");
                     getBrowseExecutor().execute(() -> switchOnForPlay(() -> {
                         for (MediaBrowserCompat.MediaItem item : getBrowseHelper().search(query)) {
                             if (item.isPlayable() && getBrowseHelper().playMediaId(item.getMediaId())) {
@@ -493,6 +545,11 @@ public class ControlService extends MediaBrowserServiceCompat {
                         quit();
                     } else if (ACTION_POWER.equals(action)) {
                         powerPressed();
+                    } else if (ACTION_SHUFFLE.equals(action)) {
+                        // Toggle LMS's shuffle mode (it then lists the queue in the shuffled order; off restores it).
+                        if (null!=lastStatus) {
+                            sendCommand(new String[]{"playlist", "shuffle", 0==lastStatus.shuffle ? "1" : "0"});
+                        }
                     } else if (ACTION_RATE.equals(action)) {
                         if (canRate()) {
                             long now = SystemClock.elapsedRealtime();
@@ -548,6 +605,10 @@ public class ControlService extends MediaBrowserServiceCompat {
         // Android Auto draws custom action icons in one colour, so the state is shown by the icon's shape.
         boolean powered = null!=lastStatus && lastStatus.powered && null!=lastStatus.id && lastStatus.id.equals(MainActivity.activePlayer);
         builder.addCustomAction(ACTION_POWER, getString(R.string.power), powered ? R.drawable.ic_power_on : R.drawable.ic_power_off);
+        if (null!=lastStatus && lastStatus.playlistIndex >= 0 && null!=lastStatus.id && lastStatus.id.equals(MainActivity.activePlayer)) {
+            builder.addCustomAction(ACTION_SHUFFLE, getString(R.string.shuffle),
+                    0==lastStatus.shuffle ? R.drawable.ic_shuffle_off : R.drawable.ic_shuffle);
+        }
         // In the car Android Auto restarts the app straight away, so Quit would only restart the player app.
         if (!carConnected) {
             builder.addCustomAction(ACTION_QUIT, getString(R.string.quit), R.drawable.ic_action_quit);
@@ -732,6 +793,7 @@ public class ControlService extends MediaBrowserServiceCompat {
         }
         lastStatus = status;
         checkResumePosition(status);
+        handler.post(() -> carResumeStatus(status));
         handler.post(this::updateNotification);
         handler.post(this::updateMediaSession);
     }
@@ -1339,6 +1401,186 @@ public class ControlService extends MediaBrowserServiceCompat {
         return !Utils.isEmpty(playerApp) && !LocalPlayer.NO_PLAYER.equals(playerApp);
     }
 
+    private void playCurrent() {
+        sendCommand(PLAY_COMMAND);
+        // Resuming, LMS's first status can still have the old time (seen: the track's end), and
+        // nothing is pushed while a track plays on.
+        handler.postDelayed(commandStatusRefresh, PLAY_STATUS_REFRESH_MS);
+    }
+
+    // "Resume after reconnecting": the car disconnected, remember the active player's track and position.
+    private void saveCarState() {
+        if (null!=carResume) {
+            // Not resumed during this drive: keep the saved state for the next one.
+            Utils.debug("Keeping the state saved for " + carResume.player);
+            carResume = null;
+            return;
+        }
+        String playerId = MainActivity.activePlayer;
+        if (!prefs.getBoolean(SettingsActivity.RESUME_ON_CONNECT_PREF_KEY, false) || Utils.isEmpty(playerId)) {
+            return;
+        }
+        PlayerStatus status = lastStatus;
+        getBrowseExecutor().execute(() -> {
+            CarResume state = fetchCarState(playerId, status);
+            Utils.debug("Saving car state: " + state);
+            if (null==state) {
+                prefs.edit().remove(CAR_RESUME_STATE_PREF_KEY).apply();
+            } else {
+                prefs.edit().putString(CAR_RESUME_STATE_PREF_KEY, state.serialize()).apply();
+            }
+        });
+    }
+
+    // The player's current track and position, from LMS, or from the last status if LMS can't be reached.
+    // Called on the browse executor.
+    private CarResume fetchCarState(String playerId, PlayerStatus status) {
+        try {
+            if (null==rpc) {
+                rpc = new JsonRpc(getApplicationContext());
+            }
+            JSONObject response = rpc.sendMessageSync(playerId, new String[]{"status", "-", "1", "tags:"}, 3000);
+            JSONObject result = null==response ? null : response.optJSONObject("result");
+            JSONArray loop = null==result ? null : result.optJSONArray("playlist_loop");
+            JSONObject track = null==loop ? null : loop.optJSONObject(0);
+            if (null!=track && track.optLong("id", 0) > 0) {
+                long trackId = track.optLong("id", 0);
+                long time = (long) (result.optDouble("time", 0) * 1000.0);
+                if ("stop".equals(result.optString("mode")) && null!=status && playerId.equals(status.id) &&
+                        trackId==status.trackId) {
+                    time = displayTime(status); // stopped by Power, with the position saved
+                }
+                return new CarResume(playerId, trackId, result.optInt("playlist_cur_index", 0), time);
+            }
+        } catch (Exception e) {
+            Utils.debug("Failed to read the status: " + e.getMessage());
+        }
+        if (null==status || !playerId.equals(status.id) || status.trackId <= 0 || status.playlistIndex < 0) {
+            return null;
+        }
+        return new CarResume(playerId, status.trackId, status.playlistIndex, status.isPlaying
+                ? status.time + SystemClock.elapsedRealtime() - status.timestamp : displayTime(status));
+    }
+
+    // The car connected: load the state saved at the last disconnect, to be played once the player is on.
+    private void loadCarResume() {
+        clearCarResumeState();
+        if (!prefs.getBoolean(SettingsActivity.RESUME_ON_CONNECT_PREF_KEY, false)) {
+            return;
+        }
+        // On the browse executor: saving at the last disconnect may still be running there.
+        getBrowseExecutor().execute(() -> {
+            CarResume resume = CarResume.parse(prefs.getString(CAR_RESUME_STATE_PREF_KEY, null));
+            if (null==resume) {
+                return;
+            }
+            handler.post(() -> {
+                if (!carConnected) {
+                    return;
+                }
+                Utils.debug("To resume: " + resume);
+                carResume = resume;
+                carResumeStatus(lastStatus);
+            });
+        });
+    }
+
+    // A status of the active player: resume once the player is on and connected.
+    private void carResumeStatus(PlayerStatus status) {
+        CarResume resume = carResume;
+        if (null==resume || null==status || !resume.player.equals(status.id) || !status.powered ||
+                status.playlistIndex < 0) {
+            return;
+        }
+        checkCarResume(false);
+    }
+
+    // Play from the saved position if the player is where the car left it: the same track current at the same
+    // queue index, and not played on past the saved position (a restarted player is at 0:00). If it moved on
+    // since, nothing is resumed (and play, a play from a controller during the check, just plays).
+    private void checkCarResume(boolean play) {
+        carResumePlay |= play;
+        CarResume resume = carResume;
+        if (null==resume || carResumeChecking) {
+            return;
+        }
+        carResumeChecking = true;
+        getBrowseExecutor().execute(() -> {
+            boolean ok = false;
+            boolean playing = false;
+            int current = -1;
+            long currentTrack = 0;
+            long time = 0;
+            try {
+                if (null==rpc) {
+                    rpc = new JsonRpc(getApplicationContext());
+                }
+                JSONObject response = rpc.sendMessageSync(resume.player, new String[]{"status", "-", "1", "tags:"}, 3000);
+                JSONObject result = null==response ? null : response.optJSONObject("result");
+                if (null!=result) {
+                    ok = true;
+                    playing = "play".equals(result.optString("mode"));
+                    current = result.optInt("playlist_cur_index", -1);
+                    time = "stop".equals(result.optString("mode")) ? 0 : (long) (result.optDouble("time", 0) * 1000.0);
+                    JSONArray loop = result.optJSONArray("playlist_loop");
+                    JSONObject track = null==loop ? null : loop.optJSONObject(0);
+                    currentTrack = null==track ? 0 : track.optLong("id", 0);
+                }
+            } catch (Exception e) {
+                Utils.debug("Failed to read the status: " + e.getMessage());
+            }
+            boolean read = ok;
+            boolean isPlaying = playing;
+            int currentIndex = current;
+            long trackId = currentTrack;
+            long position = time;
+            handler.post(() -> carResumeChecked(resume, read, isPlaying, currentIndex, trackId, position));
+        });
+    }
+
+    private void carResumeChecked(CarResume resume, boolean ok, boolean playing, int current, long trackId, long time) {
+        carResumeChecking = false;
+        boolean play = carResumePlay;
+        carResumePlay = false;
+        if (resume != carResume || !ok || !resume.player.equals(MainActivity.activePlayer)) {
+            // Cleared meanwhile, or the status couldn't be read (tried again on the next status).
+            if (play) {
+                playCurrent();
+            }
+            return;
+        }
+        String moved = CarResume.movedOn(resume, current, trackId, time);
+        if (null!=moved) {
+            clearCarResume(moved);
+            if (play) {
+                playCurrent();
+            }
+            return;
+        }
+        clearCarResume("playing from " + Utils.timeStr(resume.time));
+        // Seeked to once it plays.
+        saveResumePosition(resume.player, resume.trackId, resume.time);
+        if (playing) {
+            handler.removeCallbacks(commandStatusRefresh);
+            handler.post(commandStatusRefresh);
+        } else {
+            playCurrent();
+        }
+    }
+
+    private void clearCarResume(String reason) {
+        if (null!=carResume) {
+            Utils.debug("Car state resumed or dropped: " + reason);
+            prefs.edit().remove(CAR_RESUME_STATE_PREF_KEY).apply();
+        }
+        clearCarResumeState();
+    }
+
+    private void clearCarResumeState() {
+        carResume = null;
+        carResumePlay = false;
+    }
+
     private void playOnPlayer(Runnable play) {
         if (null==restrictedPlayer()) {
             play.run();
@@ -1441,6 +1683,7 @@ public class ControlService extends MediaBrowserServiceCompat {
                     } else {
                         carConnected = false;
                         lastAutoConnect = 0; // the debounce is only for repeats within one connection
+                        saveCarState();
                         updateMediaSession();
                     }
                 }
@@ -1464,6 +1707,8 @@ public class ControlService extends MediaBrowserServiceCompat {
         }
         lastAutoConnect = now;
         Utils.debug("Android Auto connected");
+        loadCarResume();
+        getBrowseHelper().prefetchPlayCounts();
         // Queued before Android Auto's first loadChildren, so the root and its lists use a valid selection.
         getBrowseExecutor().execute(() -> {
             if (getBrowseHelper().ensureLibrarySelected()) {

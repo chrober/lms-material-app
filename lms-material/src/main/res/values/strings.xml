@@ -83,12 +83,24 @@
     <string name="auto_tab_playlists">Playlists</string>
     <string name="auto_tab_players">Players</string>
     <string name="auto_tab_libraries">Libraries</string>
+    <string name="auto_tab_copy_queue">Copy Queue From Player</string>
+    <string name="copy_queue_none">No other player has a queue</string>
+    <string name="auto_show_unplayed">Show Unplayed Albums</string>
+    <string name="auto_show_unplayed_summary">List the albums that have never been played under Albums.</string>
+    <string name="auto_rediscover_months">Rediscover Albums: not played for</string>
     <string name="move_up">Move up</string>
     <string name="move_down">Move down</string>
     <string name="reset">Reset</string>
     <string name="rating">Rating</string>
+    <string name="add_to_queue">Add to queue</string>
+    <string name="play_album">Play album</string>
+    <string name="rediscover_albums">Rediscover Albums</string>
+    <string name="unplayed_albums">Unplayed Albums</string>
+    <string name="shuffle">Shuffle</string>
     <string name="queue">Queue</string>
     <string name="auto_album_click">When an album is selected</string>
     <string name="auto_ignore_connect_play">Ignore the car\'s play on connect</string>
     <string name="auto_ignore_connect_play_summary">Some cars send play a few seconds after connecting, which starts music even with Android Auto\'s \'Start music automatically\' off. Ignore a play from Android Auto in the first 15 seconds after the car connects.</string>
+    <string name="auto_resume_on_connect">Resume after reconnecting</string>
+    <string name="auto_resume_on_connect_summary">When the car disconnects, remember the track and position. On the next connect, play from there if the player hasn\'t been used since.</string>
 </resources>

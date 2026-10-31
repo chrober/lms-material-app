@@ -16,14 +16,14 @@ public class AutoTabOrderTest {
 
     @Test
     public void keepsSavedOrder() {
-        String saved = "players,libraries,albums,artists,favorites,playlists";
+        String saved = "players,libraries,albums,artists,favorites,playlists,copy_queue";
         assertEquals(saved, AutoTabOrder.serialize(AutoTabOrder.parse(saved)));
     }
 
     @Test
     public void dropsUnknownAndDuplicatesAndAppendsMissing() {
         assertEquals(Arrays.asList(AutoTabOrder.PLAYLISTS, AutoTabOrder.ARTISTS, AutoTabOrder.ALBUMS,
-                        AutoTabOrder.FAVORITES, AutoTabOrder.PLAYERS, AutoTabOrder.LIBRARIES),
+                        AutoTabOrder.FAVORITES, AutoTabOrder.PLAYERS, AutoTabOrder.LIBRARIES, AutoTabOrder.COPY_QUEUE),
                 AutoTabOrder.parse("playlists,bogus,artists,playlists"));
     }
 }

@@ -31,11 +31,12 @@ public class PlayerStatus {
     public int playlistIndex = -1; // index of current track in the play queue, -1 if unknown/empty
     public double playlistTimestamp = 0; // changes whenever the play queue is modified
     public boolean powered = true; // switched on, and connected to LMS
+    public int shuffle = 0; // LMS shuffle mode: 0 off, 1 by song, 2 by album
 
     @NonNull
     @Override
     public String toString() {
-        return "id:"+id+", title:"+title+", artist:"+artist+", album:"+album+", cover:"+cover+", duration:"+Utils.timeStr(duration)+", time:"+Utils.timeStr(time)+", mode:"+mode+", isPlaying:"+isPlaying+", volume:"+volume+", trackId:"+trackId+", rating:"+rating+", playlistIndex:"+playlistIndex+", powered:"+powered;
+        return "id:"+id+", title:"+title+", artist:"+artist+", album:"+album+", cover:"+cover+", duration:"+Utils.timeStr(duration)+", time:"+Utils.timeStr(time)+", mode:"+mode+", isPlaying:"+isPlaying+", volume:"+volume+", trackId:"+trackId+", rating:"+rating+", playlistIndex:"+playlistIndex+", powered:"+powered+", shuffle:"+shuffle;
     }
 
     public String display() {

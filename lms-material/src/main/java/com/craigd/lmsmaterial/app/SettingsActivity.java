@@ -70,6 +70,7 @@ public class SettingsActivity extends AppCompatActivity {
     public static final String PLAYER_START_MENU_ITEM_PREF_KEY = "menu_start_player";
     public static final String STOP_APP_ON_QUIT_PREF_KEY = "stop_app_on_quit";
     public static final String IGNORE_CONNECT_PLAY_PREF_KEY = "auto_ignore_connect_play";
+    public static final String RESUME_ON_CONNECT_PREF_KEY = "auto_resume_on_connect";
     public static final int PERMISSION_READ_PHONE_STATE = 1;
     public static final int PERMISSION_POST_NOTIFICATIONS = 2;
     public static final int PERMISSION_NOTIFS_AND_READ_PHONE_STATE = 3;
@@ -395,6 +396,7 @@ public class SettingsActivity extends AppCompatActivity {
                 case AutoTabOrder.PLAYLISTS: return getString(R.string.auto_tab_playlists);
                 case AutoTabOrder.PLAYERS: return getString(R.string.auto_tab_players);
                 case AutoTabOrder.LIBRARIES: return getString(R.string.auto_tab_libraries);
+                case AutoTabOrder.COPY_QUEUE: return getString(R.string.auto_tab_copy_queue);
                 default: return tab;
             }
         }
