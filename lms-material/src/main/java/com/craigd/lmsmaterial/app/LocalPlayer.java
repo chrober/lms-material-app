@@ -174,15 +174,17 @@ public class LocalPlayer {
         }
         try {
             Intent intent = new Intent();
-            intent.setClassName(pkg, SQUEEZELITE_SERVICE_CLASS);
             if (start) {
+                intent.setClassName(pkg, SQUEEZELITE_SERVICE_CLASS);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent);
                 } else {
                     context.startService(intent);
                 }
             } else {
-                context.stopService(intent);
+                intent.setClassName(pkg, SQUEEZELITE_PKG+".CommandReceiver");
+                intent.setAction(SQUEEZELITE_PKG+".STOP");
+                context.sendBroadcast(intent);
             }
             return true;
         } catch (Exception e) {
