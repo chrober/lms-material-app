@@ -1,0 +1,17 @@
+<!-- Same picture as the Rediscover Releases LMS plugin's icon (LMS-Rediscover-Your-Music, icon.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,3a9,9 0,0 0,-8.95 8H1l3,3.5L7,11H5.07A7,7 0,1 1,12 19a6.96,6.96 0,0 1,-4.6 -1.73l-1.42,1.42A9,9 0,1 0,12 3z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.6"
+        android:pathData="M16.2,12a4.2,4.2 0,1 1,-8.4 0a4.2,4.2 0,1 1,8.4 0z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13.2,12a1.2,1.2 0,1 1,-2.4 0a1.2,1.2 0,1 1,2.4 0z" />
+</vector>
