@@ -53,7 +53,8 @@ public class SlimClient extends BayeuxClient {
         for (Message message : messages) {
             Utils.error(message.getJSON(), failure);
         }
-        if (failure instanceof IOException && connectionState.isConnected()) {
+        // Not once disconnected: the old client's dropped request fails after a reconnect replaced it.
+        if (failure instanceof IOException && connectionState.isConnected() && !isDisconnected()) {
             rehandshake();
         }
     }
