@@ -70,7 +70,7 @@ public class CometClient {
     private static final String DEFAULT_WORKS_COVER = "/material/html/images/nowork.png";
     private static final String RANDOMPLAY_COVER = "/material/html/images/randomplay.png";
     private static final String IMAGE_SIZE = "_600x600_f";
-    private static final String PLAYER_STATUS_TAGS = "tags:acdlKN";
+    private static final String PLAYER_STATUS_TAGS = "tags:acdlKNR";
     private static final int HANDSHAKE_TIMEOUT = 4*1000;
     private static final int MSG_HANDSHAKE_TIMEOUT = 1;
     private static final int MSG_DISCONNECT = 2;
@@ -345,6 +345,11 @@ public class CometClient {
         } else {
             data.put("unsubscribe", responseChannel);
         }
+        if (null==bayeuxClient) {
+            // Queued just before a reconnect dropped the client; onConnected() re-subscribes to the player.
+            Utils.debug("Not connected, dropping publish to " + channel);
+            return;
+        }
         bayeuxClient.getChannel(channel).publish(data, publishListener);
     }
 
@@ -455,7 +460,8 @@ public class CometClient {
     }
 
     private void handlePlayerStatus(String id, String mode, String remote_title, String artist, String album, String title,
-                                    String artwork_url, String coverid, long duration, long time, int volume) {
+                                    String artwork_url, String coverid, long duration, long time, int volume,
+                                    long trackId, int rating, int playlistIndex, double playlistTimestamp) {
         PlayerStatus status = new PlayerStatus();
         status.id = id;
         status.timestamp = SystemClock.elapsedRealtime();
@@ -471,6 +477,10 @@ public class CometClient {
         status.time = "stop".equals(mode) ? 0 : time;
         status.isPlaying = "play".equals(mode);
         status.volume = volume;
+        status.trackId = trackId;
+        status.rating = rating;
+        status.playlistIndex = playlistIndex;
+        status.playlistTimestamp = playlistTimestamp;
         if (!Utils.isEmpty(artwork_url)) {
             String resolved = resolveImageUrl(artwork_url);
             if (!Utils.isEmpty(resolved)) {
@@ -482,6 +492,30 @@ public class CometClient {
         }
         Utils.debug(status.toString());
         service.updatePlayerStatus(status);
+    }
+
+    private long parseLong(Object val) {
+        if (val instanceof Number) {
+            return ((Number)val).longValue();
+        }
+        if (val instanceof String) {
+            try {
+                return Long.parseLong((String) val);
+            } catch (NumberFormatException ignored) { }
+        }
+        return 0;
+    }
+
+    private double parseDouble(Object val) {
+        if (val instanceof Number) {
+            return ((Number)val).doubleValue();
+        }
+        if (val instanceof String) {
+            try {
+                return Double.parseDouble((String) val);
+            } catch (NumberFormatException ignored) { }
+        }
+        return 0;
     }
 
     private float parseFloat(Object val) {
@@ -554,11 +588,15 @@ public class CometClient {
                         getString(track, "coverid"),
                         (long) (getFloat(track, "duration") * 1000.0f),
                         (long) (getFloat(response, "time") * 1000.0f),
-                        volume);
+                        volume,
+                        track.optLong("id", 0),
+                        Math.round(getFloat(track, "rating")),
+                        response.has("playlist_cur_index") ? (int) getFloat(response, "playlist_cur_index") : -1,
+                        response.optDouble("playlist_timestamp", 0));
                 return;
             }
         }
-        handlePlayerStatus(id, getString(response, "mode"), null, null, null, null, null, null, 0, 0, volume);
+        handlePlayerStatus(id, getString(response, "mode"), null, null, null, null, null, null, 0, 0, volume, 0, 0, -1, 0);
     }
 
     @SuppressWarnings("unchecked")
@@ -587,9 +625,13 @@ public class CometClient {
                     (String)track.get("coverid"),
                     (long)(parseFloat(track.get("duration"))*1000.0f),
                     (long)(parseFloat(messageData.get("time"))*1000.0f),
-                    volume);
+                    volume,
+                    parseLong(track.get("id")),
+                    Math.round(parseFloat(track.get("rating"))),
+                    null==messageData.get("playlist_cur_index") ? -1 : (int) parseFloat(messageData.get("playlist_cur_index")),
+                    parseDouble(messageData.get("playlist_timestamp")));
         } else {
-            handlePlayerStatus(playerId, (String)messageData.get("mode"), null, null, null, null, null, null, 0, 0, volume);
+            handlePlayerStatus(playerId, (String)messageData.get("mode"), null, null, null, null, null, null, 0, 0, volume, 0, 0, -1, 0);
         }
     }
 }
