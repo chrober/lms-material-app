@@ -16,9 +16,11 @@ import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Toast;
@@ -35,7 +37,9 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceManager;
 import androidx.preference.SwitchPreferenceCompat;
+import androidx.recyclerview.widget.RecyclerView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import io.github.muddz.styleabletoast.StyleableToast;
@@ -305,6 +309,18 @@ public class SettingsActivity extends AppCompatActivity {
                         layout.setOrientation(LinearLayout.VERTICAL);
                         layout.setPadding(padding, padding, padding, padding / 2);
                         layout.addView(input);
+                        String currentPlayer = MainActivity.activePlayerName;
+                        if (null != currentPlayer && !currentPlayer.isEmpty()) {
+                            Button useCurrent = new Button(getContext(), null, android.R.attr.borderlessButtonStyle);
+                            useCurrent.setText(getString(R.string.use_current_player, currentPlayer));
+                            useCurrent.setOnClickListener(v -> {
+                                input.setText(currentPlayer);
+                                input.setSelection(currentPlayer.length());
+                            });
+                            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                            params.gravity = Gravity.END;
+                            layout.addView(useCurrent, params);
+                        }
                         builder.setView(layout);
 
                         builder.setPositiveButton(R.string.ok, (dialog, which) -> {
@@ -319,6 +335,15 @@ public class SettingsActivity extends AppCompatActivity {
 
                         builder.show();
                     }
+                    return true;
+                });
+            }
+
+            final Preference tabOrderButton = getPreferenceManager().findPreference(AutoTabOrder.PREF_KEY);
+            if (tabOrderButton != null) {
+                updateTabOrderSummary(tabOrderButton);
+                tabOrderButton.setOnPreferenceClickListener(arg0 -> {
+                    showTabOrderDialog(tabOrderButton);
                     return true;
                 });
             }
@@ -388,6 +413,57 @@ public class SettingsActivity extends AppCompatActivity {
 
         private void updateKioskSummary(Preference pref, SharedPreferences prefs) {
             pref.setSummary(KioskMode.isEnabled(prefs) ? R.string.kiosk_mode_enabled_summary : R.string.kiosk_mode_summary);
+        }
+
+        private String tabLabel(String tab) {
+            switch (tab) {
+                case AutoTabOrder.ALBUMS: return getString(R.string.auto_tab_albums);
+                case AutoTabOrder.ARTISTS: return getString(R.string.auto_tab_artists);
+                case AutoTabOrder.FAVORITES: return getString(R.string.auto_tab_favorites);
+                case AutoTabOrder.PLAYLISTS: return getString(R.string.auto_tab_playlists);
+                case AutoTabOrder.PLAYERS: return getString(R.string.auto_tab_players);
+                case AutoTabOrder.LIBRARIES: return getString(R.string.auto_tab_libraries);
+                default: return tab;
+            }
+        }
+
+        private void updateTabOrderSummary(Preference pref) {
+            if (getContext()==null) {
+                return;
+            }
+            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getContext());
+            List<String> labels = new ArrayList<>();
+            for (String tab : AutoTabOrder.parse(sharedPreferences.getString(AutoTabOrder.PREF_KEY, null))) {
+                labels.add(tabLabel(tab));
+            }
+            pref.setSummary(String.join(", ", labels));
+        }
+
+        private void showTabOrderDialog(Preference pref) {
+            if (getContext()==null) {
+                return;
+            }
+            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getContext());
+            List<String> order = AutoTabOrder.parse(sharedPreferences.getString(AutoTabOrder.PREF_KEY, null));
+            int padding = getResources().getDimensionPixelOffset(R.dimen.dlg_padding);
+            RecyclerView list = new RecyclerView(getContext());
+            list.setPadding(padding, padding / 2, padding / 2, 0);
+            list.setClipToPadding(false);
+            new TabOrderAdapter(order, this::tabLabel).attachTo(list);
+
+            AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
+            builder.setTitle(R.string.auto_tab_order);
+            builder.setView(list);
+            builder.setPositiveButton(R.string.ok, (dialog, which) -> {
+                sharedPreferences.edit().putString(AutoTabOrder.PREF_KEY, AutoTabOrder.serialize(order)).apply();
+                updateTabOrderSummary(pref);
+            });
+            builder.setNeutralButton(R.string.reset, (dialog, which) -> {
+                sharedPreferences.edit().putString(AutoTabOrder.PREF_KEY, AutoTabOrder.serialize(AutoTabOrder.DEFAULT)).apply();
+                updateTabOrderSummary(pref);
+            });
+            builder.setNegativeButton(R.string.cancel, (dialog, which) -> dialog.cancel());
+            builder.show();
         }
 
         @Override
