@@ -32,6 +32,19 @@ jobs:
       - name: Run Android lint
         run: ./gradlew :lms-material:lintDebug --console=plain
 
+      - name: Summarize lint results
+        if: always()
+        run: |
+          report=lms-material/build/reports/lint-results-debug.txt
+          echo '## Android lint results' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$report" ]; then
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Lint did not produce a text report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload lint reports
         if: always()
         uses: actions/upload-artifact@v4
