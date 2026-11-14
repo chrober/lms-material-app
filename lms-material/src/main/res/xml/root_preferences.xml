@@ -155,6 +155,30 @@
             android:title="@string/auto_album_click"
             app:iconSpaceReserved="false"
             app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"
+            app:key="auto_show_unplayed"
+            app:summary="@string/auto_show_unplayed_summary"
+            app:title="@string/auto_show_unplayed" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="auto_show_rediscover"
+            app:summary="@string/auto_show_rediscover_summary"
+            app:title="@string/auto_show_rediscover" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="auto_ignore_connect_play"
+            app:summary="@string/auto_ignore_connect_play_summary"
+            app:title="@string/auto_ignore_connect_play" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="auto_resume_on_connect"
+            app:summary="@string/auto_resume_on_connect_summary"
+            app:title="@string/auto_resume_on_connect" />
     </PreferenceCategory>
 
     <PreferenceCategory

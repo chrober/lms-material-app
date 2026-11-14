@@ -66,6 +66,8 @@ public class SettingsActivity extends AppCompatActivity {
     public static final String AUTO_START_PLAYER_APP_PREF_KEY = "auto_start_player";
     public static final String PLAYER_START_MENU_ITEM_PREF_KEY = "menu_start_player";
     public static final String STOP_APP_ON_QUIT_PREF_KEY = "stop_app_on_quit";
+    public static final String IGNORE_CONNECT_PLAY_PREF_KEY = "auto_ignore_connect_play";
+    public static final String RESUME_ON_CONNECT_PREF_KEY = "auto_resume_on_connect";
     public static final int PERMISSION_READ_PHONE_STATE = 1;
     public static final int PERMISSION_POST_NOTIFICATIONS = 2;
     public static final int PERMISSION_NOTIFS_AND_READ_PHONE_STATE = 3;
@@ -348,6 +350,21 @@ public class SettingsActivity extends AppCompatActivity {
                 });
             }
 
+            final SwitchPreferenceCompat rediscoverPref = getPreferenceManager().findPreference(LmsBrowseHelper.SHOW_REDISCOVER_PREF_KEY);
+            if (rediscoverPref != null) {
+                if (rediscoverPref.isChecked()) {
+                    checkRediscoverPlugin(rediscoverPref, false);
+                }
+                rediscoverPref.setOnPreferenceChangeListener((pref, newValue) -> {
+                    if (Boolean.TRUE.equals(newValue)) {
+                        checkRediscoverPlugin(rediscoverPref, true);
+                    } else {
+                        rediscoverPref.setSummary(R.string.auto_show_rediscover_summary);
+                    }
+                    return true;
+                });
+            }
+
             Preference clearCacheButton = getPreferenceManager().findPreference(CLEAR_CACHE_PREF_KEY);
             if (clearCacheButton != null) {
                 clearCacheButton.setOnPreferenceClickListener(arg0 -> {
@@ -423,8 +440,46 @@ public class SettingsActivity extends AppCompatActivity {
                 case AutoTabOrder.PLAYLISTS: return getString(R.string.auto_tab_playlists);
                 case AutoTabOrder.PLAYERS: return getString(R.string.auto_tab_players);
                 case AutoTabOrder.LIBRARIES: return getString(R.string.auto_tab_libraries);
+                case AutoTabOrder.COPY_QUEUE: return getString(R.string.auto_tab_copy_queue);
                 default: return tab;
             }
+        }
+
+        /**
+         * "Show Rediscover Albums list" needs the Rediscover Releases plugin on the server: if LMS says it
+         * doesn't have it, warn in the summary, and with a dialog when the setting has just been switched on.
+         */
+        private void checkRediscoverPlugin(SwitchPreferenceCompat pref, boolean justEnabled) {
+            if (null==getContext()) {
+                return;
+            }
+            JsonRpc rpc = new JsonRpc(getContext());
+            new Thread(() -> {
+                Boolean installed = LmsBrowseHelper.rediscoverPluginInstalled(rpc);
+                if (null==getActivity()) {
+                    return;
+                }
+                getActivity().runOnUiThread(() -> {
+                    if (!isAdded() || !pref.isChecked()) {
+                        return;
+                    }
+                    if (Boolean.FALSE.equals(installed)) {
+                        pref.setSummary(R.string.rediscover_plugin_missing_summary);
+                        if (justEnabled) {
+                            new AlertDialog.Builder(requireContext())
+                                    .setTitle(R.string.rediscover_plugin_missing_title)
+                                    .setMessage(getString(R.string.rediscover_plugin_missing, getString(R.string.rediscover_repo_url)))
+                                    .setPositiveButton(R.string.ok, null)
+                                    .show();
+                        }
+                    } else {
+                        pref.setSummary(R.string.auto_show_rediscover_summary);
+                        if (null==installed && justEnabled) {
+                            StyleableToast.makeText(requireContext(), getString(R.string.rediscover_plugin_unknown), Toast.LENGTH_LONG, R.style.toast).show();
+                        }
+                    }
+                });
+            }, "RediscoverCheck").start();
         }
 
         private void updateTabOrderSummary(Preference pref) {

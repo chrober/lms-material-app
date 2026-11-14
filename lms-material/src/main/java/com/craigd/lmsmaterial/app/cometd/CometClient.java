@@ -53,6 +53,9 @@ public class CometClient {
     private SlimClient bayeuxClient;
     private String currentPlayer = null;
     private String subscribedPlayer = null;
+    // A single listener: onConnected() runs again after every rehandshake, and subscribing a new one each time
+    // made every status message be handled once per earlier rehandshake.
+    private final ClientSessionChannel.MessageListener playerStatusListener = this::handlePlayerStatus;
     // Keep server details so that we can detect if changed
     private String serverAddress = "";
     private int serverPort = 9000;
@@ -171,6 +174,9 @@ public class CometClient {
         Utils.debug("");
         connectionState.setConnectionState(ConnectionState.State.CONNECTION_STARTED);
         backgroundHandler.post(() -> {
+            // A connect while connected (e.g. two network changes in a row) would otherwise leave the old client
+            // running alongside the new one, each rehandshaking and receiving player status.
+            disconnectFromServer();
             ServerDiscovery.Server server = new ServerDiscovery.Server(prefs.getString(SettingsActivity.SERVER_PREF_KEY, null));
             if (null == server.ip) {
                 connectionState.setConnectionError(ConnectionState.Error.INVALID_URL);
@@ -321,7 +327,10 @@ public class CometClient {
         Utils.debug("currentPlayer:"+currentPlayer);
         subscribedPlayer = null;
         connectionState.setConnectionState(ConnectionState.State.CONNECTION_COMPLETED);
-        bayeuxClient.getChannel("/"+bayeuxClient.getId() + "/slim/playerstatus/*").subscribe(this::handlePlayerStatus);
+        ClientSessionChannel statusChannel = bayeuxClient.getChannel("/"+bayeuxClient.getId() + "/slim/playerstatus/*");
+        if (!statusChannel.getSubscribers().contains(playerStatusListener)) {
+            statusChannel.subscribe(playerStatusListener);
+        }
         subscribeToPlayer(currentPlayer);
         backgroundHandler.removeMessages(MSG_HANDSHAKE_TIMEOUT);
     }
@@ -461,8 +470,10 @@ public class CometClient {
 
     private void handlePlayerStatus(String id, String mode, String remote_title, String artist, String album, String title,
                                     String artwork_url, String coverid, long duration, long time, int volume,
-                                    long trackId, int rating, int playlistIndex, double playlistTimestamp) {
+                                    long trackId, int rating, int playlistIndex, double playlistTimestamp, boolean powered, int shuffle,
+                                    boolean pushed) {
         PlayerStatus status = new PlayerStatus();
+        status.pushed = pushed;
         status.id = id;
         status.timestamp = SystemClock.elapsedRealtime();
         status.mode = mode;
@@ -481,6 +492,8 @@ public class CometClient {
         status.rating = rating;
         status.playlistIndex = playlistIndex;
         status.playlistTimestamp = playlistTimestamp;
+        status.powered = powered;
+        status.shuffle = shuffle;
         if (!Utils.isEmpty(artwork_url)) {
             String resolved = resolveImageUrl(artwork_url);
             if (!Utils.isEmpty(resolved)) {
@@ -490,8 +503,45 @@ public class CometClient {
         if (Utils.isEmpty(status.cover) && !Utils.isEmpty(coverid)) {
             status.cover = coverUrl("/music/"+coverid+"/cover"+IMAGE_SIZE);
         }
-        Utils.debug(status.toString());
+        Utils.debug(status.toString() + (pushed ? "" : " (read)"));
+        checkPushes(status);
         service.updatePlayerStatus(status);
+    }
+
+    // A status read that shows a change (track, queue position, play/pause) which no push brought means the
+    // subscription has gone quiet while the connection looks fine (seen after a burst of reconnects: no pushes
+    // until the stream next dropped). If no push arrives soon after, reconnect, at most once a minute.
+    private static final long MISSED_PUSH_GRACE_MS = 3000;
+    private static final long MISSED_PUSH_RECONNECT_MS = 60000;
+    private PlayerStatus lastPushed;
+    private volatile long lastPushAt;
+    private long lastMissedPushReconnect;
+
+    private void checkPushes(PlayerStatus status) {
+        if (status.pushed) {
+            lastPushed = status;
+            lastPushAt = SystemClock.elapsedRealtime();
+            return;
+        }
+        PlayerStatus pushed = lastPushed;
+        if (null==pushed || !Objects.equals(pushed.id, status.id) || !isConnected() ||
+                (pushed.trackId == status.trackId && pushed.playlistIndex == status.playlistIndex &&
+                 Objects.equals(pushed.mode, status.mode))) {
+            return;
+        }
+        long seenAt = SystemClock.elapsedRealtime();
+        backgroundHandler.postDelayed(() -> {
+            long now = SystemClock.elapsedRealtime();
+            if (lastPushAt >= seenAt || now - lastMissedPushReconnect < MISSED_PUSH_RECONNECT_MS || !isConnected()) {
+                return;
+            }
+            PlayerStatus last = lastPushed;
+            Utils.info("Status change not pushed (" + (null==last ? "-" : last.mode + " " + last.playlistIndex) + " -> " +
+                    status.mode + " " + status.playlistIndex + "): reconnecting");
+            lastMissedPushReconnect = now;
+            lastPushed = null;
+            connect();
+        }, MISSED_PUSH_GRACE_MS);
     }
 
     private long parseLong(Object val) {
@@ -546,6 +596,11 @@ public class CometClient {
         return null==val ? -1 : Math.round(Math.abs(parseFloat(val)));
     }
 
+    // Missing values count as on/connected.
+    private boolean isPowered(Object power, Object connected) {
+        return (null==power || 0!=parseFloat(power)) && (null==connected || 0!=parseFloat(connected));
+    }
+
     private String getString(JSONObject json, String key) {
         try {
             return json.getString(key);
@@ -592,11 +647,15 @@ public class CometClient {
                         track.optLong("id", 0),
                         Math.round(getFloat(track, "rating")),
                         response.has("playlist_cur_index") ? (int) getFloat(response, "playlist_cur_index") : -1,
-                        response.optDouble("playlist_timestamp", 0));
+                        response.optDouble("playlist_timestamp", 0),
+                        isPowered(response.opt("power"), response.opt("player_connected")),
+                        response.optInt("playlist shuffle", 0), false);
                 return;
             }
         }
-        handlePlayerStatus(id, getString(response, "mode"), null, null, null, null, null, null, 0, 0, volume, 0, 0, -1, 0);
+        handlePlayerStatus(id, getString(response, "mode"), null, null, null, null, null, null, 0, 0, volume, 0, 0, -1, 0,
+                isPowered(response.opt("power"), response.opt("player_connected")),
+                        response.optInt("playlist shuffle", 0), false);
     }
 
     @SuppressWarnings("unchecked")
@@ -629,9 +688,13 @@ public class CometClient {
                     parseLong(track.get("id")),
                     Math.round(parseFloat(track.get("rating"))),
                     null==messageData.get("playlist_cur_index") ? -1 : (int) parseFloat(messageData.get("playlist_cur_index")),
-                    parseDouble(messageData.get("playlist_timestamp")));
+                    parseDouble(messageData.get("playlist_timestamp")),
+                    isPowered(messageData.get("power"), messageData.get("player_connected")),
+                    (int) parseFloat(messageData.get("playlist shuffle")), true);
         } else {
-            handlePlayerStatus(playerId, (String)messageData.get("mode"), null, null, null, null, null, null, 0, 0, volume, 0, 0, -1, 0);
+            handlePlayerStatus(playerId, (String)messageData.get("mode"), null, null, null, null, null, null, 0, 0, volume, 0, 0, -1, 0,
+                    isPowered(messageData.get("power"), messageData.get("player_connected")),
+                    (int) parseFloat(messageData.get("playlist shuffle")), true);
         }
     }
 }

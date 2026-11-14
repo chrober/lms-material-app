@@ -24,9 +24,10 @@ public class AutoTabOrder {
     public static final String PLAYLISTS = "playlists";
     public static final String PLAYERS = "players";
     public static final String LIBRARIES = "libraries";
+    public static final String COPY_QUEUE = "copy_queue";
 
     public static final List<String> DEFAULT = Collections.unmodifiableList(Arrays.asList(
-            ALBUMS, ARTISTS, FAVORITES, PLAYLISTS, PLAYERS, LIBRARIES));
+            ALBUMS, ARTISTS, FAVORITES, PLAYLISTS, PLAYERS, LIBRARIES, COPY_QUEUE));
 
     /**
      * Parse a stored value. Unknown and duplicate keys are dropped, and any tab missing
