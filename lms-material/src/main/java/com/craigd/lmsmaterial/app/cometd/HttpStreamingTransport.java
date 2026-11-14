@@ -496,7 +496,8 @@ public class HttpStreamingTransport extends HttpClientTransport implements Messa
             }
 
             // Schedule a task to expire if the maxNetworkDelay elapses
-            ScheduledFuture<?> task = _scheduler.schedule(() -> fail(new TimeoutException(), "Expired"), maxNetworkDelay, TimeUnit.MILLISECONDS);
+            final Socket sentOn = socket;
+            ScheduledFuture<?> task = _scheduler.schedule(() -> expired(message, sentOn), maxNetworkDelay, TimeUnit.MILLISECONDS);
 
             // Register the exchange
             // Message responses must have the same messageId as the requests
@@ -507,6 +508,27 @@ public class HttpStreamingTransport extends HttpClientTransport implements Messa
             // Paranoid check
             if (existing != null)
                 throw new IllegalStateException();
+        }
+
+        /**
+         * A request got no reply in time. If it went out on a socket that a new handshake has since replaced, its
+         * reply was lost with that socket: drop it, and leave the current connection alone. Failing the delegate
+         * would close the current socket and fail its long-poll /meta/connect, and the client then stayed silent
+         * (car connect 2026-11-11 17:07: three handshakes within 200 ms, a subscribe from the second expired 10 s
+         * later, no status pushes for 47 minutes).
+         */
+        private void expired(Message.Mutable message, Socket sentOn) {
+            Socket current;
+            synchronized (this) {
+                current = socket;
+            }
+            if (sentOn != current) {
+                if (null != deregisterMessage(message)) {
+                    Utils.debug("Dropping " + message.getChannel() + " " + message.getId() + ": sent on a replaced socket");
+                }
+                return;
+            }
+            fail(new TimeoutException(), "Expired");
         }
 
         private Exchange deregisterMessage(Message.Mutable message) {
