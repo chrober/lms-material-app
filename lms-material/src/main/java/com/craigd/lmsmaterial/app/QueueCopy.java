@@ -30,6 +30,17 @@ final class QueueCopy {
         JSONObject request(String playerId, String... command) throws Exception;
     }
 
+    /** Whether the copy is still wanted: false after a Pause or another player being selected. */
+    interface Wanted {
+        boolean get();
+    }
+
+    enum Result {
+        NOT_COPIED, // failed or no longer wanted; the player's queue is as it was
+        COPIED,     // copied, its current entry selected but not playing (no longer wanted once it was under way)
+        PLAYING     // copied and playing
+    }
+
     static final class Entry {
         final String trackId; // library track, or null
         final String url;
@@ -95,17 +106,30 @@ final class QueueCopy {
 
     /**
      * Replaces the queue of playerId (currently old) with the source's entries and plays its current one. Returns
-     * false if that failed; the old queue is then put back (not playing). Either way the queue is left in play
+     * NOT_COPIED if that failed; the old queue is then put back (not playing). Either way the queue is left in play
      * order with shuffle off: switching shuffle on again would reshuffle it.
+     *
+     * The copy is checked to be still wanted twice. Before the queue is touched: if not, nothing is changed.
+     * Once it has been replaced: if not, the copy is kept (a Pause stops the sound, it doesn't undo the copy) but
+     * its current entry isn't played.
      */
-    static boolean copy(Lms lms, String playerId, Snapshot source, Snapshot old, String libraryId) {
+    static Result copy(Lms lms, String playerId, Snapshot source, Snapshot old, String libraryId, Wanted wanted) {
         if (source.entries.isEmpty()) {
-            return false;
+            return Result.NOT_COPIED;
+        }
+        if (!wanted.get()) {
+            Utils.debug("Copy queue: no longer wanted, the queue of " + playerId + " is left as it was");
+            return Result.NOT_COPIED;
         }
         try {
             fill(lms, playerId, source.entries, libraryId);
-            lms.request(playerId, "playlist", "index", String.valueOf(source.index));
-            return true;
+            if (wanted.get()) {
+                lms.request(playerId, "playlist", "index", String.valueOf(source.index));
+                return Result.PLAYING;
+            }
+            Utils.debug("Copy queue: no longer wanted once copied, not playing it on " + playerId);
+            lms.request(playerId, "playlist", "index", String.valueOf(source.index), "0", "1");
+            return Result.COPIED;
         } catch (Exception e) {
             Utils.debug("Copy queue: failed (" + e.getMessage() + "), restoring the queue of " + playerId);
         }
@@ -118,7 +142,7 @@ final class QueueCopy {
         } catch (Exception e) {
             Utils.debug("Copy queue: couldn't restore the queue of " + playerId + ": " + e.getMessage());
         }
-        return false;
+        return Result.NOT_COPIED;
     }
 
     // Replaces the queue with the entries, in this order (shuffle off), and checks that LMS has them all.

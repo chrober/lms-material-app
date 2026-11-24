@@ -1465,21 +1465,23 @@ public class LmsBrowseHelper {
      * by track rather than with the Material skin's queue transfer, whose sync/unsync leaves cue sheet tracks as
      * metadata-less "tmp://" copies; such entries in the source queue are mapped back to library tracks. Entries
      * that aren't library tracks (e.g. radio) are copied by URL. Order and repeated tracks are kept, and if the
-     * copy fails the active player's old queue is put back (see QueueCopy).
+     * copy fails the active player's old queue is put back (see QueueCopy). A Pause (wanted false) before the
+     * active player's queue is replaced leaves it as it was; after that, the copy is kept but not played.
      */
-    private boolean copyQueue(String fromId) {
+    public QueueCopy.Result copyQueue(String mediaId, QueueCopy.Wanted wanted) {
+        String fromId = mediaId.substring(COPY_QUEUE_PREFIX.length());
         String toId = MainActivity.activePlayer;
         if (Utils.isEmpty(toId) || toId.equals(fromId)) {
-            return false;
+            return QueueCopy.Result.NOT_COPIED;
         }
         try {
             JSONObject status = rpc.sendMessageSync(fromId, new String[]{"status", "0", String.valueOf(BROWSE_LIMIT), "tags:u"}, TIMEOUT_MS);
             status = null==status ? null : status.optJSONObject("result");
             QueueCopy.Snapshot source = queueSnapshot(status);
-            if (null==source || source.entries.isEmpty()) return false;
+            if (null==source || source.entries.isEmpty()) return QueueCopy.Result.NOT_COPIED;
             if (!QueueCopy.isComplete(source, status.optInt("playlist_tracks", 0))) {
                 Utils.debug("Copy queue: the queue of " + fromId + " is longer than " + BROWSE_LIMIT + " entries, not copying");
-                return false;
+                return QueueCopy.Result.NOT_COPIED;
             }
             double time = status.optDouble("time", 0);
             JSONObject old = rpc.sendMessageSync(toId, new String[]{"status", "0", String.valueOf(BROWSE_LIMIT), "tags:u"}, TIMEOUT_MS);
@@ -1487,28 +1489,26 @@ public class LmsBrowseHelper {
             QueueCopy.Snapshot oldQueue = queueSnapshot(oldStatus);
             if (null==oldQueue) {
                 Utils.debug("Copy queue: can't read the queue of " + toId + ", not copying");
-                return false;
+                return QueueCopy.Result.NOT_COPIED;
             }
             if (!QueueCopy.isComplete(oldQueue, oldStatus.optInt("playlist_tracks", 0))) {
                 // It couldn't be put back in full if the copy failed.
                 Utils.debug("Copy queue: the queue of " + toId + " is longer than " + BROWSE_LIMIT + " entries, not copying");
-                return false;
+                return QueueCopy.Result.NOT_COPIED;
             }
             Utils.debug("Copying the queue of " + fromId + " to " + toId + ": " + source.entries.size() + " entries, at " +
                     source.index + "/" + time + ", replacing " + oldQueue.entries.size());
             // No library filter: copy exactly that queue.
-            if (!QueueCopy.copy(this::lmsResult, toId, source, oldQueue, ALL_LIBRARIES_ID)) {
-                return false;
-            }
-            if (time > 1) {
+            QueueCopy.Result result = QueueCopy.copy(this::lmsResult, toId, source, oldQueue, ALL_LIBRARIES_ID, wanted);
+            if (QueueCopy.Result.PLAYING==result && time > 1) {
                 // Seek once the track has started, or LMS ignores it.
                 Thread.sleep(1000);
                 rpc.sendMessageSync(toId, new String[]{"time", String.valueOf(time)}, TIMEOUT_MS);
             }
-            return true;
+            return result;
         } catch (Exception e) {
             Utils.error("Failed to copy the queue of " + fromId, e);
-            return false;
+            return QueueCopy.Result.NOT_COPIED;
         }
     }
 
@@ -1754,7 +1754,7 @@ public class LmsBrowseHelper {
             sendLoadCommand("album_id:" + mediaId.substring(6));
             return true;
         } else if (mediaId.startsWith(COPY_QUEUE_PREFIX)) {
-            return copyQueue(mediaId.substring(COPY_QUEUE_PREFIX.length()));
+            return QueueCopy.Result.NOT_COPIED!=copyQueue(mediaId, () -> true);
         } else if (mediaId.startsWith("track/")) {
             sendLoadCommand("track_id:" + mediaId.substring(6));
             return true;

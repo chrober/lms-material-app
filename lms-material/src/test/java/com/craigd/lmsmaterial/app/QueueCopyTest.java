@@ -78,6 +78,8 @@ public class QueueCopyTest {
         }
     }
 
+    private static final QueueCopy.Wanted WANTED = () -> true;
+
     private static QueueCopy.Entry track(String id) {
         return new QueueCopy.Entry(id, "file:///music/" + id + ".flac#0-100");
     }
@@ -122,7 +124,7 @@ public class QueueCopyTest {
     public void keepsOrderAndRepeatedTracks() {
         FakeLms lms = lmsWith("track:9");
         QueueCopy.Snapshot source = snapshot(3, track("1"), track("2"), track("1"), track("3"), track("2"));
-        assertTrue(QueueCopy.copy(lms, "p", source, snapshot(0, track("9")), "-1"));
+        assertEquals(QueueCopy.Result.PLAYING, QueueCopy.copy(lms, "p", source, snapshot(0, track("9")), "-1", WANTED));
         assertEquals(Arrays.asList("track:1", "track:2", "track:1", "track:3", "track:2"), lms.queue);
         assertEquals(3, lms.index);
         assertTrue(lms.playing);
@@ -132,7 +134,7 @@ public class QueueCopyTest {
     public void keepsNonLibraryEntriesInPlace() {
         FakeLms lms = lmsWith();
         QueueCopy.Snapshot source = snapshot(1, track("1"), url("http://radio/stream"), track("2"));
-        assertTrue(QueueCopy.copy(lms, "p", source, snapshot(0), "-1"));
+        assertEquals(QueueCopy.Result.PLAYING, QueueCopy.copy(lms, "p", source, snapshot(0), "-1", WANTED));
         assertEquals(Arrays.asList("track:1", "http://radio/stream", "track:2"), lms.queue);
         assertEquals(1, lms.index);
     }
@@ -141,7 +143,7 @@ public class QueueCopyTest {
     public void turnsShuffleOffToKeepThePlayOrder() {
         FakeLms lms = lmsWith("track:9");
         lms.shuffle = 1;
-        assertTrue(QueueCopy.copy(lms, "p", snapshot(0, track("1"), track("2")), snapshot(0, track("9")), "-1"));
+        assertEquals(QueueCopy.Result.PLAYING, QueueCopy.copy(lms, "p", snapshot(0, track("1"), track("2")), snapshot(0, track("9")), "-1", WANTED));
         assertEquals(0, lms.shuffle);
     }
 
@@ -153,7 +155,7 @@ public class QueueCopyTest {
         for (int failAt = 0; failAt < 7; failAt++) {
             FakeLms lms = lmsWith("track:7", "track:8", "track:7", "http://other/stream");
             lms.failAt = failAt;
-            assertFalse("failing request " + failAt, QueueCopy.copy(lms, "p", source, old, "-1"));
+            assertEquals("failing request " + failAt, QueueCopy.Result.NOT_COPIED, QueueCopy.copy(lms, "p", source, old, "-1", WANTED));
             assertEquals("failing request " + failAt,
                     Arrays.asList("track:7", "track:8", "track:7", "http://other/stream"), lms.queue);
             assertEquals(2, lms.index);
@@ -167,7 +169,7 @@ public class QueueCopyTest {
         FakeLms lms = lmsWith("track:7", "track:8");
         lms.maxLength = 3;
         QueueCopy.Snapshot source = snapshot(0, track("1"), track("2"), track("3"), track("4"));
-        assertFalse(QueueCopy.copy(lms, "p", source, snapshot(1, track("7"), track("8")), "-1"));
+        assertEquals(QueueCopy.Result.NOT_COPIED, QueueCopy.copy(lms, "p", source, snapshot(1, track("7"), track("8")), "-1", WANTED));
         assertEquals(Arrays.asList("track:7", "track:8"), lms.queue);
         assertEquals(1, lms.index);
     }
@@ -176,16 +178,51 @@ public class QueueCopyTest {
     public void anEmptyOldQueueStaysEmptyAfterAFailure() {
         FakeLms lms = lmsWith();
         lms.failAt = 2;
-        assertFalse(QueueCopy.copy(lms, "p", snapshot(0, track("1"), track("2")), snapshot(0), "-1"));
+        assertEquals(QueueCopy.Result.NOT_COPIED, QueueCopy.copy(lms, "p", snapshot(0, track("1"), track("2")), snapshot(0), "-1", WANTED));
         assertTrue(lms.queue.isEmpty());
     }
 
     @Test
     public void nothingToCopy() {
         FakeLms lms = lmsWith("track:9");
-        assertFalse(QueueCopy.copy(lms, "p", snapshot(0), snapshot(0, track("9")), "-1"));
+        assertEquals(QueueCopy.Result.NOT_COPIED, QueueCopy.copy(lms, "p", snapshot(0), snapshot(0, track("9")), "-1", WANTED));
         assertEquals(Arrays.asList("track:9"), lms.queue);
         assertEquals(0, lms.requests);
+    }
+
+    @Test
+    public void aCopyNoLongerWantedLeavesTheQueueAsItWas() {
+        // Pause pressed while the queues were read: nothing is sent.
+        FakeLms lms = lmsWith("track:7", "track:8");
+        lms.index = 1;
+        lms.playing = true;
+        assertEquals(QueueCopy.Result.NOT_COPIED, QueueCopy.copy(lms, "p", snapshot(0, track("1"), track("2")),
+                snapshot(1, track("7"), track("8")), "-1", () -> false));
+        assertEquals(Arrays.asList("track:7", "track:8"), lms.queue);
+        assertEquals(1, lms.index);
+        assertTrue(lms.playing);
+        assertEquals(0, lms.requests);
+    }
+
+    @Test
+    public void aPauseDuringTheCopyKeepsItWithoutPlaying() {
+        // Pause pressed once the queue was being replaced: the copy is finished, its current track selected but
+        // not played.
+        FakeLms lms = lmsWith("track:9");
+        boolean[] paused = {false};
+        QueueCopy.Lms pausing = (playerId, command) -> {
+            JSONObject result = lms.request(playerId, command);
+            if ("clear".equals(command[1])) {
+                paused[0] = true;
+            }
+            return result;
+        };
+        QueueCopy.Snapshot source = snapshot(1, track("1"), track("2"), track("1"));
+        assertEquals(QueueCopy.Result.COPIED,
+                QueueCopy.copy(pausing, "p", source, snapshot(0, track("9")), "-1", () -> !paused[0]));
+        assertEquals(Arrays.asList("track:1", "track:2", "track:1"), lms.queue);
+        assertEquals(1, lms.index);
+        assertFalse(lms.playing);
     }
 
     @Test

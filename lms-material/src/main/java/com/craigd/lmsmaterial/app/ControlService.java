@@ -691,10 +691,11 @@ public class ControlService extends MediaBrowserServiceCompat {
                     PlayRequests.Request request = newPlayRequest();
                     if (LmsBrowseHelper.isCopyQueue(mediaId)) {
                         // Checked on the main thread, then copied on the browse executor (many requests, each
-                        // waited for), checked again there.
+                        // waited for), checked again there: a Pause before the queue is replaced leaves it as it
+                        // was, one while it is being replaced keeps the copy but doesn't play it.
                         getBrowseExecutor().execute(() -> switchOnForPlay(request, () -> getBrowseExecutor().execute(() -> {
-                            if (playRequests.isWanted(request, MainActivity.activePlayer) &&
-                                    getBrowseHelper().playMediaId(mediaId)) {
+                            if (QueueCopy.Result.NOT_COPIED!=getBrowseHelper().copyQueue(mediaId,
+                                    () -> playRequests.isWanted(request, MainActivity.activePlayer))) {
                                 handler.post(ControlService.this::playbackRequested);
                             }
                         })));
