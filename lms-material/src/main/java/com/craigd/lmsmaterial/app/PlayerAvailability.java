@@ -54,6 +54,30 @@ final class PlayerAvailability {
         return restricted == null || restricted.equals(id) || restricted.equals(name);
     }
 
+    // The default player setting and the ID of the player it matched last time ("<setting>\n<id>").
+    static final String DEFAULT_PLAYER_MATCH_KEY = "default_player_match";
+
+    static void rememberDefaultPlayer(SharedPreferences prefs, String restricted, String playerId) {
+        if (restricted == null || playerId == null || playerId.isEmpty()) {
+            return;
+        }
+        String match = restricted + "\n" + playerId;
+        if (!match.equals(prefs.getString(DEFAULT_PLAYER_MATCH_KEY, null))) {
+            prefs.edit().putString(DEFAULT_PLAYER_MATCH_KEY, match).apply();
+        }
+    }
+
+    // Whether a player is the default one. The setting usually holds the player's name, which isn't known before
+    // LMS is asked (e.g. when the service starts with only the saved player ID), so the ID it matched last time
+    // counts too.
+    static boolean isDefaultPlayer(SharedPreferences prefs, String restricted, String id, String name) {
+        if (isAllowed(restricted, id, name)) {
+            return true;
+        }
+        return name == null && id != null && !id.isEmpty()
+                && (restricted + "\n" + id).equals(prefs.getString(DEFAULT_PLAYER_MATCH_KEY, null));
+    }
+
     static List<Player> parse(JSONArray players) {
         List<Player> parsed = new ArrayList<>();
         if (players == null) {

@@ -167,6 +167,26 @@ public class PlayerAvailabilityTest {
     }
 
     @Test
+    public void recognisesTheDefaultPlayerByTheIdItMatchedLastTime() {
+        Map<String, String> stored = new HashMap<>();
+        SharedPreferences prefs = prefs(stored);
+
+        // By ID or name, as before.
+        assertTrue(PlayerAvailability.isDefaultPlayer(prefs, "00:11:22:33:44:55", "00:11:22:33:44:55", null));
+        assertTrue(PlayerAvailability.isDefaultPlayer(prefs, "Phone", "00:11:22:33:44:55", "Phone"));
+        // Default set by name, player name not known yet (service start): not recognised until it was matched once.
+        assertFalse(PlayerAvailability.isDefaultPlayer(prefs, "Phone", "00:11:22:33:44:55", null));
+        PlayerAvailability.rememberDefaultPlayer(prefs, "Phone", "00:11:22:33:44:55");
+        assertTrue(PlayerAvailability.isDefaultPlayer(prefs, "Phone", "00:11:22:33:44:55", null));
+        // Another player, or a changed setting, isn't.
+        assertFalse(PlayerAvailability.isDefaultPlayer(prefs, "Phone", "aa:bb:cc:dd:ee:ff", null));
+        assertFalse(PlayerAvailability.isDefaultPlayer(prefs, "Kitchen", "00:11:22:33:44:55", null));
+        assertFalse(PlayerAvailability.isDefaultPlayer(prefs, "Phone", null, null));
+        // Once the name is known, it decides (e.g. the player was renamed).
+        assertFalse(PlayerAvailability.isDefaultPlayer(prefs, "Phone", "00:11:22:33:44:55", "Phone (renamed)"));
+    }
+
+    @Test
     public void twoPlayersAtThisDevicesAddressAreAmbiguous() {
         // E.g. the official Squeezelite app and a fork, both running on the phone.
         List<PlayerAvailability.Player> players = Arrays.asList(

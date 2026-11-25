@@ -1370,7 +1370,8 @@ public class ControlService extends MediaBrowserServiceCompat {
 
     private void applyPlayerRestriction() {
         String restricted = restrictedPlayer();
-        if (null!=restricted && !restricted.equals(MainActivity.activePlayer)) {
+        if (null!=restricted && !Utils.isEmpty(MainActivity.activePlayer) &&
+                !PlayerAvailability.isDefaultPlayer(prefs, restricted, MainActivity.activePlayer, MainActivity.activePlayerName)) {
             // Don't control a previously used player; the availability check selects the default one.
             MainActivity.activePlayer = null;
             MainActivity.activePlayerName = null;
@@ -1466,6 +1467,7 @@ public class ControlService extends MediaBrowserServiceCompat {
             return;
         }
         if (player != null) {
+            PlayerAvailability.rememberDefaultPlayer(prefs, restricted, player.id);
             boolean changed = !player.id.equals(MainActivity.activePlayer);
             if (changed) {
                 Utils.debug("Selecting default player " + player.name + ", id:" + player.id);
